@@ -1,0 +1,13 @@
+# Terraform variables override file template
+# Copy this file to terraform/terraform.tfvars and customize
+
+gcp_project_id         = "your-gcp-project-id"
+gcp_region             = "eu-west1"
+cloud_run_service_name = "rupert-security-conductor"
+artifact_registry_repo = "security-conductor"
+docker_image_name      = "security-conductor"
+docker_image_tag       = "latest"
+cloud_run_memory       = "512Mi"
+cloud_run_cpu          = "0.5"
+cloud_run_timeout      = 300
+cloud_run_max_instances = 10

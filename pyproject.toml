@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rupert-security-conductor"
+version = "0.1.0"
+description = "AI-powered vulnerability scanner on GCP Cloud Run using Pydantic-AI agents"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "Rupert Team"}
+]
+keywords = [
+    "security",
+    "vulnerability-scanner",
+    "ai-agents",
+    "fastapi",
+    "gcp",
+    "gemini",
+    "pydantic-ai"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+
+dependencies = [
+    "fastapi==0.109.0",
+    "uvicorn[standard]==0.27.0",
+    "pydantic==2.5.3",
+    "pydantic-ai==0.0.10",
+    "google-cloud-logging==3.8.0",
+    "google-cloud-secret-manager==2.16.4",
+    "google-cloud-storage==2.10.0",
+    "python-dotenv==1.0.0",
+    "httpx==0.25.2"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==7.4.3",
+    "pytest-asyncio==0.21.1",
+    "pytest-cov==4.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/rupert-security-conductor"
+Repository = "https://github.com/yourusername/rupert-security-conductor.git"
+Issues = "https://github.com/yourusername/rupert-security-conductor/issues"
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["*/tests/*"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+strict_optional = true
+warn_unused_ignores = true

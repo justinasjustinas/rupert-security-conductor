@@ -1,0 +1,116 @@
+"""Pydantic schemas for API requests and agent responses."""
+
+from datetime import datetime
+from enum import Enum
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class VulnerabilityType(str, Enum):
+    """OWASP vulnerability categories."""
+
+    SQL_INJECTION = "SQL_INJECTION"
+    XSS = "CROSS_SITE_SCRIPTING"
+    AUTH_BYPASS = "AUTHENTICATION_BYPASS"
+    SECURE_TRANSMISSION = "INSECURE_TRANSMISSION"
+    CRYPTOGRAPHY = "BROKEN_CRYPTOGRAPHY"
+    LOGIC_FLAW = "LOGIC_FLAW"
+    INJECTION = "INJECTION"
+    OTHER = "OTHER"
+
+
+class Severity(str, Enum):
+    """Vulnerability severity levels."""
+
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+    INFO = "INFO"
+
+
+class PotentialFinding(BaseModel):
+    """Potential finding from Hunter agent (unverified)."""
+
+    vulnerability_type: VulnerabilityType
+    severity: Severity
+    file_path: str
+    line_number: int
+    description: str
+    evidence: str
+    remediation: str
+
+
+class VerifiedResult(BaseModel):
+    """Verification result from Verifier agent."""
+
+    finding: "PotentialFinding"
+    verdict: str = Field(description="CONFIRMED | REFUTED | UNCERTAIN")
+    confidence: int = Field(ge=0, le=100, description="Confidence level 0-100")
+    explanation: str
+    trace_id: Optional[str] = None
+
+
+class Finding(BaseModel):
+    """Individual security finding (verified)."""
+
+    vulnerability_type: VulnerabilityType
+    severity: Severity
+    file_path: str
+    line_number: int
+    description: str
+    evidence: str
+    remediation: str
+    verified: bool = Field(
+        default=True, description="Whether verifier agent confirmed this finding"
+    )
+    confidence: int = Field(default=100, ge=0, le=100)
+
+
+class WebhookPayload(BaseModel):
+    """GitHub/Bitbucket webhook payload."""
+
+    repository: str
+    branch: str
+    commit_hash: str
+    diff_url: str
+    diff_content: Optional[str] = None
+    author: str
+    webhook_source: str = Field(default="github", description="github or bitbucket")
+
+
+class ScanRequest(BaseModel):
+    """Request to initiate a security scan."""
+
+    repository: str
+    branch: str
+    commit_hash: str
+    code_diff: str
+    author: str = "webhook"
+
+
+class ScanResult(BaseModel):
+    """Aggregated security scan findings."""
+
+    scan_id: str
+    timestamp: datetime
+    repository: str
+    commit_hash: str
+    findings: list[Finding]
+    summary: str
+    total_vulnerabilities: int
+    critical_count: int
+    high_count: int
+
+
+class HealthResponse(BaseModel):
+    """Health check response."""
+
+    status: str
+    version: str
+    timestamp: datetime
+
+
+# Rebuild VerifiedResult to resolve forward reference to PotentialFinding
+VerifiedResult.model_rebuild()
