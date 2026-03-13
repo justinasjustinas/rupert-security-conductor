@@ -2,6 +2,22 @@
 
 An AI-powered vulnerability scanner orchestrated with Pydantic-AI agents, deployed to GCP Cloud Run on the free tier.
 
+## 🚀 Quick Start
+
+Once deployed, you'll have a Cloud Run service with:
+- 📍 **Service URL**: `https://<deployment>-<hash>-<region>.a.run.app`
+- 🏥 **Health Endpoint**: GET `/health` → Returns status
+- 🌍 **Region**: europe-west1 (or your choice - free tier eligible)
+
+⬇️ **See [DEPLOYMENT.md](DEPLOYMENT.md) for step-by-step instructions**
+
+Available endpoints:
+- `GET  /health` - Service health check
+- `POST /scan` - Submit code for security analysis
+- `GET  /docs` - Interactive API documentation (Swagger UI)
+
+---
+
 ## 🎯 Overview
 
 Rupert Security Conductor is a hobby-tier security scanner that uses AI agents to:
