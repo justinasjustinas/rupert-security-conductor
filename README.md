@@ -1,4 +1,4 @@
-# Rupert Security Conductor 🔐
+# Rupert, The Security Conductor 🔐
 
 An AI-powered vulnerability scanner orchestrated with Pydantic-AI agents, deployed to GCP Cloud Run on the free tier.
 
