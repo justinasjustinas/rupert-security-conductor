@@ -27,66 +27,56 @@ provider "google" {
 }
 
 # ============================================================================
-# ARTIFACT REGISTRY: Docker image repository
+# ARTIFACT REGISTRY: Docker image repository (created by deploy.sh)
 # ============================================================================
 
-resource "google_artifact_registry_repository" "docker_repo" {
+# Reference existing repository created by deploy.sh
+data "google_artifact_registry_repository" "docker_repo" {
   location      = var.gcp_region
   repository_id = var.artifact_registry_repo
-  description   = "Docker repository for Rupert Security Conductor"
-  format        = "DOCKER"
-
-  cleanup_policy_if_inactive {
-    condition_duration_days = 30
-  }
 }
 
 # ============================================================================
-# SERVICE ACCOUNT: Minimal IAM permissions
+# SERVICE ACCOUNT: Minimal IAM permissions (created manually or via deploy script)
 # ============================================================================
 
-resource "google_service_account" "cloud_run" {
-  account_id   = "rupert-security-conductor"
-  display_name = "Rupert Security Conductor Cloud Run Service Account"
-  description  = "Service account for Rupert Security Conductor with minimal permissions"
+# Reference existing service account
+data "google_service_account" "cloud_run" {
+  account_id = "rupert-security-conductor"
 }
 
 # Allow Cloud Run to read from Artifact Registry
 resource "google_artifact_registry_repository_iam_member" "cloud_run_reader" {
-  location   = google_artifact_registry_repository.docker_repo.location
-  repository = google_artifact_registry_repository.docker_repo.repository_id
+  location   = data.google_artifact_registry_repository.docker_repo.location
+  repository = data.google_artifact_registry_repository.docker_repo.repository_id
   role       = "roles/artifactregistry.reader"
-  member     = "serviceAccount:${google_service_account.cloud_run.email}"
+  member     = "serviceAccount:${data.google_service_account.cloud_run.email}"
 }
 
 # Allow Cloud Run to access Secret Manager for API keys
 resource "google_secret_manager_secret_iam_member" "gemini_api_key" {
-  secret_id = google_secret_manager_secret.gemini_api_key.id
+  secret_id = data.google_secret_manager_secret.gemini_api_key.id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.cloud_run.email}"
+  member    = "serviceAccount:${data.google_service_account.cloud_run.email}"
 }
 
 # Allow Cloud Run to write logs
 resource "google_project_iam_member" "cloud_run_logging" {
   project = var.gcp_project_id
   role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+  member  = "serviceAccount:${data.google_service_account.cloud_run.email}"
 }
 
 # ============================================================================
-# SECRETS MANAGER: Gemini API Key
+# SECRETS MANAGER: Gemini API Key (created manually via gcloud)
 # ============================================================================
 
-resource "google_secret_manager_secret" "gemini_api_key" {
+# Reference existing secret
+data "google_secret_manager_secret" "gemini_api_key" {
   secret_id = "rupert-gemini-api-key"
-
-  replication {
-    automatic = true
-  }
 }
 
 # NOTE: The secret value must be set manually or via separate process
-# terraform apply will NOT set the actual secret value
 # Use: gcloud secrets versions add rupert-gemini-api-key --data-file=- <<< "$GEMINI_API_KEY"
 
 # ============================================================================
@@ -99,10 +89,10 @@ resource "google_cloud_run_service" "security_conductor" {
 
   template {
     spec {
-      service_account_name = google_service_account.cloud_run.email
+      service_account_name = data.google_service_account.cloud_run.email
 
       containers {
-        image   = "${var.gcp_region}-docker.pkg.dev/${var.gcp_project_id}/${google_artifact_registry_repository.docker_repo.repository_id}/${var.docker_image_name}:${var.docker_image_tag}"
+        image   = "${var.gcp_region}-docker.pkg.dev/${var.gcp_project_id}/${data.google_artifact_registry_repository.docker_repo.repository_id}/${var.docker_image_name}:${var.docker_image_tag}"
         command = []
         args    = []
 
@@ -125,7 +115,7 @@ resource "google_cloud_run_service" "security_conductor" {
           name = "GEMINI_API_KEY"
           value_from {
             secret_key_ref {
-              name = google_secret_manager_secret.gemini_api_key.secret_id
+              name = data.google_secret_manager_secret.gemini_api_key.secret_id
               key  = "latest"
             }
           }
@@ -144,7 +134,6 @@ resource "google_cloud_run_service" "security_conductor" {
       }
 
       timeout_seconds = 300
-      max_instances   = 10
     }
 
     metadata {
@@ -159,11 +148,6 @@ resource "google_cloud_run_service" "security_conductor" {
     percent         = 100
     latest_revision = true
   }
-
-  depends_on = [
-    google_artifact_registry_repository.docker_repo,
-    google_service_account.cloud_run,
-  ]
 }
 
 # ============================================================================
@@ -179,11 +163,7 @@ resource "google_cloud_run_service_iam_member" "public_access" {
 
 # ============================================================================
 # CLOUD LOGGING: JSON structured logging
+# (Cloud Run automatically sends logs to Cloud Logging)
 # ============================================================================
+# Logging sink configuration removed - Cloud Run handles this automatically
 
-resource "google_logging_project_sink" "security_conductor_logs" {
-  name                   = "rupert-security-conductor-sink"
-  destination            = "logging.googleapis.com/projects/${var.gcp_project_id}/logs/security-conductor"
-  filter                 = "resource.type=\"cloud_run_managed_environment\" OR resource.type=\"cloud_run_managed\" OR resource.labels.service_name=\"${var.cloud_run_service_name}\""
-  unique_writer_identity = true
-}

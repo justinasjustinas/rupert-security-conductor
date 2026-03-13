@@ -1,13 +1,57 @@
 # Rupert Security Conductor - Step-by-Step Deployment Guide
 
-## Prerequisites Checklist
+## 🎉 Status: Ready to Deploy ✅
+
+Once deployed, you'll have:
+- **Service Pattern**: `https://<SERVICE_NAME>-<HASH>-<REGION>.a.run.app`
+- **Region**: europe-west1 (or your chosen region)
+- **Status**: Will be healthy after deployment
+
+To get your service URL after deployment:
+```bash
+gcloud run services describe rupert-security-conductor --region=$GCP_REGION --format='value(status.url)'
+```
+
+---
+
+## Prerequisites Checklist (for fresh deployment)
 
 - [ ] gcloud CLI installed and authenticated
 - [ ] Terraform installed (v1.0+)
-- [ ] Docker installed
+- [ ] Docker installed (with BuildKit support)
 - [ ] GCP account with billing enabled
-- [ ] Python 3.12+ installed
+- [ ] Python 3.12+ installed (for local development)
 - [ ] Gemini API key obtained
+
+## ⚡ Quick Reference - Common Commands
+
+```bash
+# Set environment variables
+export GCP_PROJECT_ID="rupert-security-conductor"
+export GCP_REGION="europe-west1"
+export GEMINI_API_KEY="your-key-here"
+
+# Set API key in Secret Manager (do this before deploying)
+gcloud secrets create rupert-gemini-api-key --replication-policy="automatic" --quiet 2>/dev/null || true
+gcloud secrets versions add rupert-gemini-api-key --data-file=- <<< "$GEMINI_API_KEY"
+
+# Deploy (builds image, pushes to Artifact Registry, applies Terraform)
+bash infra/scripts/deploy.sh $GCP_PROJECT_ID $GCP_REGION
+
+# Get service URL
+gcloud run services describe rupert-security-conductor --region $GCP_REGION --format='value(status.url)'
+
+# Test health
+curl $(gcloud run services describe rupert-security-conductor --region $GCP_REGION --format='value(status.url)')/health
+
+# View logs
+gcloud logging read "resource.labels.service_name=rupert-security-conductor" --limit 20 --format "table(timestamp,severity,textPayload)"
+
+# Destroy all resources (cleanup)
+cd infra/terraform && terraform destroy -auto-approve -var="gcp_project_id=$GCP_PROJECT_ID" -var="gcp_region=$GCP_REGION"
+```
+
+---
 
 ## Step 1: Create GCP Project
 
@@ -69,21 +113,14 @@ Test the API:
 curl http://localhost:8000/health
 ```
 
-## Step 5: Deploy to GCP Cloud Run
+## Step 5: Add Gemini API Key to Secrets Manager
 
+First, create the secret itself (this only needs to be done once):
 ```bash
-# Set project ID
-export GCP_PROJECT_ID="rupert-security-conductor"
-export GCP_REGION="eu-west1"
-
-# Run deployment (builds Docker image, pushes to AR, deploys to Cloud Run)
-bash infra/scripts/deploy.sh $GCP_PROJECT_ID $GCP_REGION
+gcloud secrets create rupert-gemini-api-key --replication-policy="automatic"
 ```
 
-## Step 6: Add Gemini API Key to Secrets Manager
-
-**After terraform deployment completes:**
-
+Then, add your API key as a new version of that secret.
 ```bash
 gcloud secrets versions add rupert-gemini-api-key --data-file=- <<< "$GEMINI_API_KEY"
 ```
@@ -91,6 +128,17 @@ gcloud secrets versions add rupert-gemini-api-key --data-file=- <<< "$GEMINI_API
 Verify it was added:
 ```bash
 gcloud secrets versions list rupert-gemini-api-key
+```
+
+## Step 6: Deploy to GCP Cloud Run
+
+```bash
+# Set project ID and region (use full region names like europe-west1, us-central1, etc.)
+export GCP_PROJECT_ID="rupert-security-conductor"
+export GCP_REGION="europe-west1"
+
+# Run deployment (builds Docker image, pushes to AR, deploys to Cloud Run); assuming you have Docker installed, of course.
+bash infra/scripts/deploy.sh $GCP_PROJECT_ID $GCP_REGION
 ```
 
 ## Step 7: Test the Deployment

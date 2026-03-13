@@ -1,5 +1,12 @@
 """Pydantic-AI agent definitions for security orchestration."""
 
+import os
+
+# Strip whitespace from Gemini API key to prevent header errors
+gemini_api_key = os.environ.get("GEMINI_API_KEY")
+if gemini_api_key:
+    os.environ["GEMINI_API_KEY"] = gemini_api_key.strip()
+
 import asyncio
 import json
 from functools import wraps

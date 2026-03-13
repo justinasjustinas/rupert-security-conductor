@@ -6,10 +6,10 @@ __pycache__/
 *.pyc
 .DS_Store
 .pytest_cache/
-terraform/.terraform/
-terraform/.terraform.lock.hcl
-terraform/terraform.tfstate*
-*.tfvars
-!terraform/terraform.tfvars.example
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/terraform.tfstate*
+infra/terraform/*.tfvars
+!infra/terraform/terraform.tfvars.example
 .idea/
 .vscode/

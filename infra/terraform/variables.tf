@@ -4,9 +4,9 @@ variable "gcp_project_id" {
 }
 
 variable "gcp_region" {
-  description = "GCP region for Cloud Run deployment"
+  description = "GCP region for Cloud Run deployment (use full region names like europe-west1, us-central1, etc.)"
   type        = string
-  default     = "eu-west1"
+  default     = "europe-west1"
 }
 
 variable "cloud_run_service_name" {
