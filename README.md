@@ -20,7 +20,7 @@ The system is designed for minimal cost ($0/month) using:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    GitHub/Bitbucket Webhooks               │
+│                    GitHub/Bitbucket Webhooks                │
 └──────────────────────────┬──────────────────────────────────┘
                            │
                            ▼
@@ -29,8 +29,8 @@ The system is designed for minimal cost ($0/month) using:
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │ Endpoints:                                             │ │
 │  │ • POST /scan          - Manual scan trigger            │ │
-│  │ • POST /webhook/github - GitHub webhook handler       │ │
-│  │ • POST /webhook/bitbucket - Bitbucket webhook handler │ │
+│  │ • POST /webhook/github - GitHub webhook handler        │ │
+│  │ • POST /webhook/bitbucket - Bitbucket webhook handler  │ │
 │  │ • GET /health         - Health check                   │ │
 │  └────────────────────────────────────────────────────────┘ │
 └──────────────────────────┬──────────────────────────────────┘
