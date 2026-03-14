@@ -10,6 +10,7 @@ You need:
 - Docker with `buildx`
 - a GCP project with billing enabled
 - a Gemini API key
+- a bearer token for manual `/scan` access
 
 Default region used in this repo:
 
@@ -104,7 +105,23 @@ Then export it:
 export GEMINI_API_KEY="your-api-key"
 ```
 
-## Step 6: Set GitHub Repository Coordinates
+## Step 6: Set a /scan Bearer Token
+
+Choose a long random token for manual testing of `/scan`:
+
+```bash
+export SCAN_API_TOKEN="replace-this-with-a-long-random-string"
+```
+
+The deployed app will require:
+
+```bash
+Authorization: Bearer $SCAN_API_TOKEN
+```
+
+for direct calls to `/scan`.
+
+## Step 7: Set GitHub Repository Coordinates
 
 For a personal repo, `GITHUB_REPOSITORY_OWNER` is your GitHub username.
 
@@ -115,7 +132,7 @@ export GITHUB_REPOSITORY_NAME="rupert-security-conductor"
 
 These values are used to scope GitHub Workload Identity Federation to one repository.
 
-## Step 7: Run the Deployment Script
+## Step 8: Run the Deployment Script
 
 From the repo root:
 
@@ -124,16 +141,20 @@ cd /Users/justinas/Workspace/rupert-security-conductor
 bash infra/scripts/deploy.sh "$GCP_PROJECT_ID" "$GCP_REGION"
 ```
 
+If you do not pass an image tag, `deploy.sh` now generates a unique one for
+each deploy using the current git SHA and a UTC timestamp. That guarantees a
+new Cloud Run revision when code changes.
+
 What `deploy.sh` does:
 1. Runs preflight checks.
 2. Enables required APIs.
 3. Imports existing bootstrap resources into Terraform state if they already exist.
 4. Creates bootstrap infrastructure with Terraform.
-5. Writes the current `GEMINI_API_KEY` into Secret Manager.
+5. Writes the current `GEMINI_API_KEY` and `SCAN_API_TOKEN` into Secret Manager.
 6. Builds and pushes the Docker image.
 7. Applies the full Terraform stack.
 
-## Step 8: Verify the Deployment
+## Step 9: Verify the Deployment
 
 Get the URL:
 
@@ -155,6 +176,7 @@ Run a sample scan:
 
 ```bash
 curl -X POST "$SERVICE_URL/scan" \
+  -H "Authorization: Bearer $SCAN_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "repository": "test-repo",
@@ -165,7 +187,7 @@ curl -X POST "$SERVICE_URL/scan" \
   }'
 ```
 
-## Step 9: Configure GitHub Actions Secrets
+## Step 10: Configure GitHub Actions Secrets
 
 After `deploy.sh` finishes, it prints the values you need.
 
@@ -185,7 +207,7 @@ Create these repository secrets:
 - `WIF_PROVIDER`
 - `WIF_SERVICE_ACCOUNT`
 
-## Step 10: Test CI/CD
+## Step 11: Test CI/CD
 
 Push a commit to `main` or `develop`.
 
@@ -195,7 +217,7 @@ The workflow at [.github/workflows/ci-cd.yml](/Users/justinas/Workspace/rupert-s
 - build and push the image
 - deploy to Cloud Run on pushes where the workflow conditions match
 
-## Step 11: Remove Temporary Bootstrap IAM
+## Step 12: Remove Temporary Bootstrap IAM
 
 After GitHub Actions deploys are confirmed working, remove the temporary human bootstrap roles:
 
@@ -219,6 +241,34 @@ gcloud projects remove-iam-policy-binding "$GCP_PROJECT_ID" \
 gcloud projects remove-iam-policy-binding "$GCP_PROJECT_ID" \
   --member="user:$BOOTSTRAP_ACCOUNT" \
   --role="roles/iam.securityAdmin"
+```
+
+## Teardown
+
+To delete the infrastructure created by this repo without deleting the whole
+GCP project:
+
+```bash
+cd /Users/justinas/Workspace/rupert-security-conductor
+bash infra/scripts/destroy.sh "$GCP_PROJECT_ID" "$GCP_REGION"
+```
+
+The script:
+1. runs `terraform destroy`
+2. then does best-effort `gcloud` cleanup for the named Cloud Run service,
+   Artifact Registry repo, app secrets, service accounts, and GitHub WIF
+   resources created by this repo
+
+For non-interactive use:
+
+```bash
+bash infra/scripts/destroy.sh "$GCP_PROJECT_ID" "$GCP_REGION" --yes
+```
+
+You can recreate everything later with:
+
+```bash
+bash infra/scripts/deploy.sh "$GCP_PROJECT_ID" "$GCP_REGION"
 ```
 
 ## Webhooks

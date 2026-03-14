@@ -73,6 +73,24 @@ resource "google_secret_manager_secret_iam_member" "gemini_api_key" {
   member    = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "scan_api_token" {
+  secret_id = google_secret_manager_secret.scan_api_token.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "github_webhook_secret" {
+  secret_id = google_secret_manager_secret.github_webhook_secret.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "bitbucket_webhook_secret" {
+  secret_id = google_secret_manager_secret.bitbucket_webhook_secret.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
 # Allow Cloud Run to write logs
 resource "google_project_iam_member" "cloud_run_logging" {
   project = var.gcp_project_id
@@ -156,6 +174,27 @@ resource "google_secret_manager_secret" "gemini_api_key" {
   }
 }
 
+resource "google_secret_manager_secret" "scan_api_token" {
+  secret_id = "rupert-scan-api-token"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret" "github_webhook_secret" {
+  secret_id = "rupert-github-webhook-secret"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret" "bitbucket_webhook_secret" {
+  secret_id = "rupert-bitbucket-webhook-secret"
+  replication {
+    auto {}
+  }
+}
+
 # ============================================================================
 # CLOUD RUN: Serverless deployment
 # ============================================================================
@@ -189,10 +228,35 @@ resource "google_cloud_run_service" "security_conductor" {
         }
 
         env {
+          name  = "GOOGLE_MODEL"
+          value = "google-gla:gemini-3-flash-preview"
+        }
+
+        env {
           name = "GEMINI_API_KEY"
           value_from {
             secret_key_ref {
               name = google_secret_manager_secret.gemini_api_key.secret_id
+              key  = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "GOOGLE_API_KEY"
+          value_from {
+            secret_key_ref {
+              name = google_secret_manager_secret.gemini_api_key.secret_id
+              key  = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "SCAN_API_TOKEN"
+          value_from {
+            secret_key_ref {
+              name = google_secret_manager_secret.scan_api_token.secret_id
               key  = "latest"
             }
           }
