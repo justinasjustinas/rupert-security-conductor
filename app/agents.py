@@ -25,6 +25,8 @@ from app.models import (
 
 logger = get_logger(__name__)
 
+MODEL_NAME = "google-gla:gemini-1.5-flash"
+
 # ============================================================================
 # RETRY DECORATOR: Exponential backoff for LLM calls
 # ============================================================================
@@ -64,10 +66,12 @@ def retry_on_llm_error(
 # HUNTER AGENT: Scans code diffs for OWASP vulnerabilities
 # ============================================================================
 
-hunter_agent = Agent(
-    model="gemini-1.5-flash",
-    name="SecurityHunter",
-    system_prompt="""You are a security vulnerability hunter scanning code diffs for OWASP vulnerabilities.
+def _build_hunter_agent() -> Agent:
+    """Create the hunter agent on demand to avoid import-time provider setup."""
+    agent = Agent(
+        model=MODEL_NAME,
+        name="SecurityHunter",
+        system_prompt="""You are a security vulnerability hunter scanning code diffs for OWASP vulnerabilities.
 
 Analyze the provided code diff and identify:
 1. SQL Injection vulnerabilities
@@ -87,26 +91,29 @@ For each vulnerability found, provide:
 - Recommended remediation
 
 Return a JSON array of findings. If no vulnerabilities found, return empty array [].""",
-)
-
-
-@hunter_agent.tool
-def analyze_code_diff(ctx: RunContext, diff_content: str) -> str:
-    """Analyze a code diff for vulnerabilities."""
-    logger.info(
-        "hunter_agent analyzing code diff", extra={"diff_size": len(diff_content)}
     )
-    return f"Analyzing code diff:\n{diff_content[:500]}..."
+
+    @agent.tool
+    def analyze_code_diff(ctx: RunContext, diff_content: str) -> str:
+        """Analyze a code diff for vulnerabilities."""
+        logger.info(
+            "hunter_agent analyzing code diff", extra={"diff_size": len(diff_content)}
+        )
+        return f"Analyzing code diff:\n{diff_content[:500]}..."
+
+    return agent
 
 
 # ============================================================================
 # VERIFIER AGENT: Adversarial agent that proves/disproves vulnerabilities
 # ============================================================================
 
-verifier_agent = Agent(
-    model="gemini-1.5-flash",
-    name="SecurityVerifier",
-    system_prompt="""You are an adversarial security verifier. Your role is to validate findings from the Hunter agent.
+def _build_verifier_agent() -> Agent:
+    """Create the verifier agent on demand to avoid import-time provider setup."""
+    agent = Agent(
+        model=MODEL_NAME,
+        name="SecurityVerifier",
+        system_prompt="""You are an adversarial security verifier. Your role is to validate findings from the Hunter agent.
 
 For each potential vulnerability provided, determine:
 1. Is this a real vulnerability or a false positive?
@@ -124,24 +131,27 @@ Provide your verdict and reasoning in JSON format with fields:
 - verdict: CONFIRMED | REFUTED | UNCERTAIN
 - explanation: detailed reasoning
 - confidence: 0-100 (confidence in your verdict)""",
-)
+    )
 
+    @agent.tool
+    def validate_finding(ctx: RunContext, finding_json: str, code_context: str) -> str:
+        """Validate a specific finding against code context."""
+        logger.info("verifier_agent validating finding")
+        return f"Validating finding with code context: {code_context[:300]}..."
 
-@verifier_agent.tool
-def validate_finding(ctx: RunContext, finding_json: str, code_context: str) -> str:
-    """Validate a specific finding against code context."""
-    logger.info("verifier_agent validating finding")
-    return f"Validating finding with code context: {code_context[:300]}..."
+    return agent
 
 
 # ============================================================================
 # REPORTER AGENT: Aggregates findings into Markdown summary
 # ============================================================================
 
-reporter_agent = Agent(
-    model="gemini-1.5-flash",
-    name="SecurityReporter",
-    system_prompt="""You are a security report generator. Your role is to aggregate verified findings and create clear, actionable Markdown reports for GitHub.
+def _build_reporter_agent() -> Agent:
+    """Create the reporter agent on demand to avoid import-time provider setup."""
+    agent = Agent(
+        model=MODEL_NAME,
+        name="SecurityReporter",
+        system_prompt="""You are a security report generator. Your role is to aggregate verified findings and create clear, actionable Markdown reports for GitHub.
 
 Given a list of verified vulnerabilities, generate a professional Markdown summary that includes:
 1. Executive Summary (severity counts, risk level)
@@ -151,14 +161,20 @@ Given a list of verified vulnerabilities, generate a professional Markdown summa
 
 Format the output as valid Markdown suitable for GitHub PR comments or issues.
 Use tables for findings and code blocks for examples.""",
-)
+    )
+
+    @agent.tool
+    def format_findings(ctx: RunContext, findings_json: str, repo_name: str) -> str:
+        """Format findings into Markdown report."""
+        logger.info("reporter_agent formatting findings", extra={"repo_name": repo_name})
+        return f"Formatting {len(findings_json)} findings for repository {repo_name}..."
+
+    return agent
 
 
-@reporter_agent.tool
-def format_findings(ctx: RunContext, findings_json: str, repo_name: str) -> str:
-    """Format findings into Markdown report."""
-    logger.info("reporter_agent formatting findings", extra={"repo_name": repo_name})
-    return f"Formatting {len(findings_json)} findings for repository {repo_name}..."
+def _google_api_key_configured() -> bool:
+    """Return whether model-backed scanning can run in this process."""
+    return bool(os.environ.get("GOOGLE_API_KEY"))
 
 
 # ============================================================================
@@ -243,9 +259,16 @@ async def run_hunter_agent(diff_content: str, scan_id: str) -> list[PotentialFin
     """
     logger.info("Starting hunter agent scan", extra={"scan_id": scan_id})
 
+    if not _google_api_key_configured():
+        logger.warning(
+            "Skipping hunter agent: GOOGLE_API_KEY is not configured",
+            extra={"scan_id": scan_id},
+        )
+        return []
+
     try:
         # Run hunter agent with diff content
-        result = await hunter_agent.run(
+        result = await _build_hunter_agent().run(
             f"Scan this code diff for vulnerabilities:\n\n{diff_content}",
         )
 
@@ -343,7 +366,7 @@ async def _verify_single_finding(
 ) -> VerifiedResult | None:
     """Verify a single finding using the Verifier agent."""
     try:
-        result = await verifier_agent.run(
+        result = await _build_verifier_agent().run(
             f"Verify this security finding:\n{finding.model_dump_json()}\n\nCode context:\n{diff_content}"
         )
 
@@ -395,9 +418,19 @@ async def run_reporter_agent(
         extra={"scan_id": scan_id, "finding_count": len(findings)},
     )
 
+    if not _google_api_key_configured():
+        logger.warning(
+            "Skipping reporter agent: GOOGLE_API_KEY is not configured",
+            extra={"scan_id": scan_id},
+        )
+        return (
+            f"## Security Scan Report\nRepository: {repository}\nCommit: {commit_hash}\n"
+            f"Scan ID: {scan_id}\n\nModel-backed report generation skipped because GOOGLE_API_KEY is not configured."
+        )
+
     try:
         findings_json = json.dumps([f.model_dump() for f in findings])
-        result = await reporter_agent.run(
+        result = await _build_reporter_agent().run(
             f"Generate a GitHub-friendly Markdown report for:\nRepository: {repository}\nCommit: {commit_hash}\nFindings:\n{findings_json}"
         )
         logger.info("Reporter generated Markdown summary", extra={"scan_id": scan_id})
