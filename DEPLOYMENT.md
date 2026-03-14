@@ -1,75 +1,45 @@
-# Rupert Security Conductor - Step-by-Step Deployment Guide
+# Deployment Guide
 
-## 🎉 Status: Ready to Deploy ✅
+This is the step-by-step deployment path for Rupert Security Conductor on GCP Cloud Run.
 
-Once deployed, you'll have:
-- **Service Pattern**: `https://<SERVICE_NAME>-<HASH>-<REGION>.a.run.app`
-- **Region**: europe-west1 (or your chosen region)
-- **Status**: Will be healthy after deployment
+## Before You Start
 
-To get your service URL after deployment:
-```bash
-gcloud run services describe rupert-security-conductor --region=$GCP_REGION --format='value(status.url)'
-```
+You need:
+- `gcloud`
+- Terraform
+- Docker with `buildx`
+- a GCP project with billing enabled
+- a Gemini API key
 
----
-
-## Prerequisites Checklist (for fresh deployment)
-
-- [ ] gcloud CLI installed and authenticated
-- [ ] Terraform installed (v1.0+)
-- [ ] Docker installed (with BuildKit support)
-- [ ] GCP account with billing enabled
-- [ ] Python 3.12+ installed (for local development)
-- [ ] Gemini API key obtained
-
-## ⚡ Quick Reference - Common Commands
+Default region used in this repo:
 
 ```bash
-# Set environment variables
-export GCP_PROJECT_ID="rupert-security-conductor"
 export GCP_REGION="europe-west1"
-export GEMINI_API_KEY="your-key-here"
-
-# Set API key in Secret Manager (do this before deploying)
-gcloud secrets create rupert-gemini-api-key --replication-policy="automatic" --quiet 2>/dev/null || true
-gcloud secrets versions add rupert-gemini-api-key --data-file=- <<< "$GEMINI_API_KEY"
-
-# Deploy (builds image, pushes to Artifact Registry, applies Terraform)
-bash infra/scripts/deploy.sh $GCP_PROJECT_ID $GCP_REGION
-
-# Get service URL
-gcloud run services describe rupert-security-conductor --region $GCP_REGION --format='value(status.url)'
-
-# Test health
-curl $(gcloud run services describe rupert-security-conductor --region $GCP_REGION --format='value(status.url)')/health
-
-# View logs
-gcloud logging read "resource.labels.service_name=rupert-security-conductor" --limit 20 --format "table(timestamp,severity,textPayload)"
-
-# Destroy all resources (cleanup)
-cd infra/terraform && terraform destroy -auto-approve -var="gcp_project_id=$GCP_PROJECT_ID" -var="gcp_region=$GCP_REGION"
 ```
 
----
-
-## Step 1: Create GCP Project
-
-### Option A: Using Console
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Click "Create Project"
-3. Name: `Rupert Security Conductor`
-4. Click "Create"
-
-### Option B: Using gcloud CLI
+## Step 1: Create or Select a GCP Project
 
 ```bash
-gcloud projects create rupert-security-conductor --display-name="Rupert Security Conductor"
-gcloud config set project rupert-security-conductor
+export GCP_PROJECT_ID="rupert-security-conductor"
+
+gcloud projects create "$GCP_PROJECT_ID" \
+  --display-name="Rupert Security Conductor" || true
+
+gcloud config set project "$GCP_PROJECT_ID"
 ```
 
-## Step 2: Enable Required APIs
+If the project already exists, the `create` command can fail safely and you can continue.
+
+## Step 2: Authenticate gcloud
+
+```bash
+gcloud auth login
+gcloud config get-value account
+```
+
+The account shown here is the one that will run the first deployment.
+
+## Step 3: Enable Required GCP APIs
 
 ```bash
 gcloud services enable \
@@ -77,85 +47,114 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   secretmanager.googleapis.com \
   cloudbuild.googleapis.com \
-  logging.googleapis.com
+  logging.googleapis.com \
+  iam.googleapis.com \
+  iamcredentials.googleapis.com
 ```
 
-## Step 3: Get Gemini API Key
+## Step 4: Grant Temporary Bootstrap IAM
 
-1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey)
-2. Click "Create API Key"
-3. Copy the API key
-4. Save to a secure location
+The first deploy needs a human account with enough permission to create:
+- Artifact Registry
+- Secret Manager resources
+- service accounts
+- Cloud Run resources and IAM
+- GitHub Workload Identity Federation resources
 
-**Optional**: Store in shell variable:
+Set the account you saw in Step 2:
+
 ```bash
-export GEMINI_API_KEY="your-api-key-here"
+export BOOTSTRAP_ACCOUNT="you@example.com"
 ```
 
-## Step 4: Setup Local Development (Optional)
+Grant the temporary roles:
 
 ```bash
-cd rupert-security-conductor
-bash infra/scripts/setup-dev.sh
+gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="user:$BOOTSTRAP_ACCOUNT" \
+  --role="roles/artifactregistry.admin"
 
-# Activate venv
-source venv/bin/activate
+gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="user:$BOOTSTRAP_ACCOUNT" \
+  --role="roles/secretmanager.admin"
 
-# Create .env file with your API key
-echo "GEMINI_API_KEY=$GEMINI_API_KEY" > .env
+gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="user:$BOOTSTRAP_ACCOUNT" \
+  --role="roles/run.admin"
 
-# Run locally
-uvicorn app.main:app --reload
+gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="user:$BOOTSTRAP_ACCOUNT" \
+  --role="roles/iam.serviceAccountAdmin"
+
+gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="user:$BOOTSTRAP_ACCOUNT" \
+  --role="roles/iam.securityAdmin"
 ```
 
-Test the API:
+These are bootstrap roles. You should remove them later after GitHub Actions deploys are working.
+
+## Step 5: Get a Gemini API Key
+
+Create a key in Google AI Studio:
+- https://aistudio.google.com/app/apikey
+
+Then export it:
+
 ```bash
-curl http://localhost:8000/health
+export GEMINI_API_KEY="your-api-key"
 ```
 
-## Step 5: Add Gemini API Key to Secrets Manager
+## Step 6: Set GitHub Repository Coordinates
 
-First, create the secret itself (this only needs to be done once):
+For a personal repo, `GITHUB_REPOSITORY_OWNER` is your GitHub username.
+
 ```bash
-gcloud secrets create rupert-gemini-api-key --replication-policy="automatic"
+export GITHUB_REPOSITORY_OWNER="your-github-username"
+export GITHUB_REPOSITORY_NAME="rupert-security-conductor"
 ```
 
-Then, add your API key as a new version of that secret.
+These values are used to scope GitHub Workload Identity Federation to one repository.
+
+## Step 7: Run the Deployment Script
+
+From the repo root:
+
 ```bash
-gcloud secrets versions add rupert-gemini-api-key --data-file=- <<< "$GEMINI_API_KEY"
+cd /Users/justinas/Workspace/rupert-security-conductor
+bash infra/scripts/deploy.sh "$GCP_PROJECT_ID" "$GCP_REGION"
 ```
 
-Verify it was added:
-```bash
-gcloud secrets versions list rupert-gemini-api-key
-```
+What `deploy.sh` does:
+1. Runs preflight checks.
+2. Enables required APIs.
+3. Imports existing bootstrap resources into Terraform state if they already exist.
+4. Creates bootstrap infrastructure with Terraform.
+5. Writes the current `GEMINI_API_KEY` into Secret Manager.
+6. Builds and pushes the Docker image.
+7. Applies the full Terraform stack.
 
-## Step 6: Deploy to GCP Cloud Run
+## Step 8: Verify the Deployment
 
-```bash
-# Set project ID and region (use full region names like europe-west1, us-central1, etc.)
-export GCP_PROJECT_ID="rupert-security-conductor"
-export GCP_REGION="europe-west1"
-
-# Run deployment (builds Docker image, pushes to AR, deploys to Cloud Run); assuming you have Docker installed, of course.
-bash infra/scripts/deploy.sh $GCP_PROJECT_ID $GCP_REGION
-```
-
-## Step 7: Test the Deployment
+Get the URL:
 
 ```bash
-# Get the Cloud Run URL
 SERVICE_URL=$(gcloud run services describe rupert-security-conductor \
-  --region=$GCP_REGION \
+  --region="$GCP_REGION" \
   --format='value(status.url)')
 
-echo $SERVICE_URL
+echo "$SERVICE_URL"
+```
 
-# Test health endpoint
-curl $SERVICE_URL/health
+Check health:
 
-# Test scan endpoint
-curl -X POST $SERVICE_URL/scan \
+```bash
+curl "$SERVICE_URL/health"
+```
+
+Run a sample scan:
+
+```bash
+curl -X POST "$SERVICE_URL/scan" \
   -H "Content-Type: application/json" \
   -d '{
     "repository": "test-repo",
@@ -166,128 +165,113 @@ curl -X POST $SERVICE_URL/scan \
   }'
 ```
 
-## Step 8: Setup Webhooks (Optional)
+## Step 9: Configure GitHub Actions Secrets
 
-### GitHub Webhook
+After `deploy.sh` finishes, it prints the values you need.
 
-1. Go to your GitHub repository
-2. Settings → Webhooks → Add webhook
-3. Payload URL: `https://<SERVICE_URL>/webhook/github`
-4. Content type: `application/json`
-5. Events: `push`, `pull_request`
-6. Create webhook
-
-### Bitbucket Webhook
-
-1. Go to your Bitbucket repository
-2. Settings → Webhooks → Create webhook
-3. URL: `https://<SERVICE_URL>/webhook/bitbucket`
-4. Events: `Repository push`
-5. Create webhook
-
-## Step 9: Monitor Logs
+You can also fetch them manually:
 
 ```bash
-# View recent logs
-gcloud logging read "resource.labels.service_name=rupert-security-conductor" \
-  --limit 50 \
-  --format "table(timestamp,severity,jsonPayload.message)"
-
-# Watch logs in real-time
-gcloud logging read "resource.labels.service_name=rupert-security-conductor" \
-  --limit 20 \
-  --format "table(timestamp,severity,jsonPayload.message)" \
-  --follow
-
-# Find logs by scan_id
-SCAN_ID="your-scan-id-here"
-gcloud logging read "jsonPayload.scan_id=$SCAN_ID" --format json
+cd /Users/justinas/Workspace/rupert-security-conductor/infra/terraform
+terraform output -raw github_workload_identity_provider
+terraform output -raw github_actions_service_account_email
 ```
 
-## Step 10 (Optional): Setup CI/CD with GitHub Actions
+Add these in GitHub:
+`Settings` → `Secrets and variables` → `Actions`
 
-1. Go to GitHub repository Settings → Secrets and variables → Actions
-2. Add the following secrets:
-   - `GCP_PROJECT_ID`: Your GCP project ID
-   - `WIF_PROVIDER`: Workload Identity Federation provider (for auth)
-   - `WIF_SERVICE_ACCOUNT`: Service account for CI/CD
+Create these repository secrets:
+- `GCP_PROJECT_ID`
+- `WIF_PROVIDER`
+- `WIF_SERVICE_ACCOUNT`
 
-3. Create `.github/workflows/ci-cd.yml` (already in the repo)
-4. On every push to main, the pipeline will:
-   - Run tests
-   - Build Docker image
-   - Push to Artifact Registry
-   - Deploy to Cloud Run
+## Step 10: Test CI/CD
+
+Push a commit to `main` or `develop`.
+
+The workflow at [.github/workflows/ci-cd.yml](/Users/justinas/Workspace/rupert-security-conductor/.github/workflows/ci-cd.yml) should:
+- run tests
+- authenticate to GCP with WIF
+- build and push the image
+- deploy to Cloud Run on pushes where the workflow conditions match
+
+## Step 11: Remove Temporary Bootstrap IAM
+
+After GitHub Actions deploys are confirmed working, remove the temporary human bootstrap roles:
+
+```bash
+gcloud projects remove-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="user:$BOOTSTRAP_ACCOUNT" \
+  --role="roles/artifactregistry.admin"
+
+gcloud projects remove-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="user:$BOOTSTRAP_ACCOUNT" \
+  --role="roles/secretmanager.admin"
+
+gcloud projects remove-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="user:$BOOTSTRAP_ACCOUNT" \
+  --role="roles/run.admin"
+
+gcloud projects remove-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="user:$BOOTSTRAP_ACCOUNT" \
+  --role="roles/iam.serviceAccountAdmin"
+
+gcloud projects remove-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="user:$BOOTSTRAP_ACCOUNT" \
+  --role="roles/iam.securityAdmin"
+```
+
+## Webhooks
+
+GitHub:
+1. Open your repository settings.
+2. Go to `Webhooks`.
+3. Add a webhook pointing to:
+   `https://<SERVICE_URL>/webhook/github`
+
+Bitbucket:
+1. Open repository settings.
+2. Go to `Webhooks`.
+3. Add a webhook pointing to:
+   `https://<SERVICE_URL>/webhook/bitbucket`
 
 ## Troubleshooting
 
-### Secret not found
-```bash
-# List existing secrets
-gcloud secrets list
+Wrong gcloud account:
 
-# Create if missing
-gcloud secrets create rupert-gemini-api-key --data-file=- <<< "$GEMINI_API_KEY"
+```bash
+gcloud auth list
+gcloud config get-value account
 ```
 
-### Cloud Run service fails on startup
+Get the service URL again:
+
 ```bash
-# Check detailed logs
+gcloud run services describe rupert-security-conductor \
+  --region="$GCP_REGION" \
+  --format='value(status.url)'
+```
+
+Read logs:
+
+```bash
 gcloud logging read "resource.labels.service_name=rupert-security-conductor" \
-  --limit 10 \
-  --format="table(timestamp,severity,textPayload)"
-
-# Redeploy
-bash infra/scripts/deploy.sh $GCP_PROJECT_ID $GCP_REGION
+  --limit 20 \
+  --format "table(timestamp,severity,jsonPayload.message)"
 ```
 
-### Docker build issues
-```bash
-# Clear Docker cache
-docker system prune -a
+Re-run Terraform outputs:
 
-# Rebuild
-docker build --no-cache -t test:latest .
+```bash
+cd /Users/justinas/Workspace/rupert-security-conductor/infra/terraform
+terraform output
 ```
 
-### Terraform state issues
-```bash
-# If using local state, validate
-cd infra/terraform
-terraform validate
-terraform plan
-
-# Remote state requires gs:// bucket (commented in main.tf)
-```
-
-## Cleanup
-
-To delete all resources and avoid charges:
+Destroy managed resources:
 
 ```bash
-cd infra/terraform
+cd /Users/justinas/Workspace/rupert-security-conductor/infra/terraform
 terraform destroy -auto-approve \
   -var="gcp_project_id=$GCP_PROJECT_ID" \
   -var="gcp_region=$GCP_REGION"
-
-# Optional: Delete entire GCP project
-gcloud projects delete $GCP_PROJECT_ID
-```
-
-## Cost Summary
-
-With this setup:
-- Cloud Run: Free (180k vCPU-sec/month free tier)
-- Gemini API: ~$0-5/month (free tier available for testing)
-- Artifact Registry: Free (first 500GB)
-- Cloud Logging: Free (first 50GB/month)
-- Secret Manager: Free (6 free secrets)
-
-**Expected Total**: $0-5/month on free tier
-
----
-
-For problems or questions, check the README.md or run:
-```bash
-make help
 ```

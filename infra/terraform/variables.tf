@@ -15,6 +15,42 @@ variable "cloud_run_service_name" {
   default     = "rupert-security-conductor"
 }
 
+variable "cloud_run_service_account_id" {
+  description = "Account ID for the Cloud Run runtime service account"
+  type        = string
+  default     = "rupert-security-conductor"
+}
+
+variable "github_actions_service_account_id" {
+  description = "Account ID for the GitHub Actions deployer service account"
+  type        = string
+  default     = "rupert-github-actions"
+}
+
+variable "github_workload_identity_pool_id" {
+  description = "Workload Identity Pool ID for GitHub Actions"
+  type        = string
+  default     = "github-actions"
+}
+
+variable "github_workload_identity_provider_id" {
+  description = "Workload Identity Provider ID for GitHub Actions"
+  type        = string
+  default     = "github-provider"
+}
+
+variable "github_repository_owner" {
+  description = "GitHub repository owner or organization for CI/CD federation"
+  type        = string
+  default     = ""
+}
+
+variable "github_repository_name" {
+  description = "GitHub repository name for CI/CD federation"
+  type        = string
+  default     = ""
+}
+
 variable "artifact_registry_repo" {
   description = "Artifact Registry repository name"
   type        = string

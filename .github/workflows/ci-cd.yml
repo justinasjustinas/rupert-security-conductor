@@ -8,8 +8,8 @@ on:
 
 env:
   GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GCP_REGION: eu-west1
-  REGISTRY: eu-west1-docker.pkg.dev
+  GCP_REGION: europe-west1
+  REGISTRY: europe-west1-docker.pkg.dev
 
 jobs:
   test:
@@ -53,7 +53,7 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && secrets.GCP_PROJECT_ID != '' && secrets.WIF_PROVIDER != '' && secrets.WIF_SERVICE_ACCOUNT != ''
 
     permissions:
       contents: 'read'
@@ -89,7 +89,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.GCP_PROJECT_ID != '' && secrets.WIF_PROVIDER != '' && secrets.WIF_SERVICE_ACCOUNT != ''
 
     permissions:
       contents: 'read'
