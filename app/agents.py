@@ -1,14 +1,8 @@
 """Pydantic-AI agent definitions for security orchestration."""
 
-import os
-
-# Strip whitespace from Gemini API key to prevent header errors
-gemini_api_key = os.environ.get("GEMINI_API_KEY")
-if gemini_api_key:
-    os.environ["GEMINI_API_KEY"] = gemini_api_key.strip()
-
 import asyncio
 import json
+import os
 from functools import wraps
 from typing import Any, Callable, TypeVar
 
@@ -22,6 +16,11 @@ from app.models import (
     VerifiedResult,
     VulnerabilityType,
 )
+
+# Strip whitespace from Gemini API key to prevent header errors
+gemini_api_key = os.environ.get("GEMINI_API_KEY")
+if gemini_api_key:
+    os.environ["GEMINI_API_KEY"] = gemini_api_key.strip()
 
 logger = get_logger(__name__)
 
@@ -46,13 +45,19 @@ def retry_on_llm_error(
             for attempt in range(max_retries):
                 try:
                     return await func(*args, **kwargs)
-                except Exception as e:
-                    last_exception = e
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    last_exception = exc
                     if attempt < max_retries - 1:
                         delay = base_delay * (2**attempt)
                         logger.warning(
-                            f"LLM call failed, retrying in {delay}s (attempt {attempt + 1}/{max_retries})",
-                            extra={"error": str(e), "retry_attempt": attempt + 1},
+                            "LLM call failed, retrying in %ss (attempt %s/%s)",
+                            delay,
+                            attempt + 1,
+                            max_retries,
+                            extra={
+                                "error": str(exc),
+                                "retry_attempt": attempt + 1,
+                            },
                         )
                         await asyncio.sleep(delay)
             raise last_exception
@@ -71,30 +76,31 @@ def _build_hunter_agent() -> Agent:
     agent = Agent(
         model=MODEL_NAME,
         name="SecurityHunter",
-        system_prompt="""You are a security vulnerability hunter scanning code diffs for OWASP vulnerabilities.
-
-Analyze the provided code diff and identify:
-1. SQL Injection vulnerabilities
-2. Cross-Site Scripting (XSS) vulnerabilities
-3. Authentication/Authorization bypasses
-4. Insecure data transmission
-5. Broken cryptography
-6. Logic flaws
-7. Other injection attacks
-
-For each vulnerability found, provide:
-- Type (from OWASP Top 10)
-- Severity (CRITICAL, HIGH, MEDIUM, LOW, INFO)
-- File path and approximate line number
-- Clear description of the vulnerability
-- Evidence from the code
-- Recommended remediation
-
-Return a JSON array of findings. If no vulnerabilities found, return empty array [].""",
+        system_prompt=(
+            "You are a security vulnerability hunter scanning code diffs for "
+            "OWASP vulnerabilities.\n\n"
+            "Analyze the provided code diff and identify:\n"
+            "1. SQL Injection vulnerabilities\n"
+            "2. Cross-Site Scripting (XSS) vulnerabilities\n"
+            "3. Authentication/Authorization bypasses\n"
+            "4. Insecure data transmission\n"
+            "5. Broken cryptography\n"
+            "6. Logic flaws\n"
+            "7. Other injection attacks\n\n"
+            "For each vulnerability found, provide:\n"
+            "- Type (from OWASP Top 10)\n"
+            "- Severity (CRITICAL, HIGH, MEDIUM, LOW, INFO)\n"
+            "- File path and approximate line number\n"
+            "- Clear description of the vulnerability\n"
+            "- Evidence from the code\n"
+            "- Recommended remediation\n\n"
+            "Return a JSON array of findings. If no vulnerabilities found, "
+            "return empty array []."
+        ),
     )
 
     @agent.tool
-    def analyze_code_diff(ctx: RunContext, diff_content: str) -> str:
+    def analyze_code_diff(_ctx: RunContext, diff_content: str) -> str:
         """Analyze a code diff for vulnerabilities."""
         logger.info(
             "hunter_agent analyzing code diff", extra={"diff_size": len(diff_content)}
@@ -113,28 +119,31 @@ def _build_verifier_agent() -> Agent:
     agent = Agent(
         model=MODEL_NAME,
         name="SecurityVerifier",
-        system_prompt="""You are an adversarial security verifier. Your role is to validate findings from the Hunter agent.
-
-For each potential vulnerability provided, determine:
-1. Is this a real vulnerability or a false positive?
-2. Can an attacker realistically exploit this?
-3. Are there mitigating factors in the codebase?
-4. What's the actual risk if exploited?
-
-Reason through each finding systematically. Use logical deduction to either:
-- CONFIRM: This is a legitimate vulnerability
-- REFUTE: This is a false positive or not exploitable
-- UNCERTAIN: Need more context
-
-Provide your verdict and reasoning in JSON format with fields:
-- finding_id: reference to original finding
-- verdict: CONFIRMED | REFUTED | UNCERTAIN
-- explanation: detailed reasoning
-- confidence: 0-100 (confidence in your verdict)""",
+        system_prompt=(
+            "You are an adversarial security verifier. Your role is to "
+            "validate findings from the Hunter agent.\n\n"
+            "For each potential vulnerability provided, determine:\n"
+            "1. Is this a real vulnerability or a false positive?\n"
+            "2. Can an attacker realistically exploit this?\n"
+            "3. Are there mitigating factors in the codebase?\n"
+            "4. What's the actual risk if exploited?\n\n"
+            "Reason through each finding systematically. Use logical "
+            "deduction to either:\n"
+            "- CONFIRM: This is a legitimate vulnerability\n"
+            "- REFUTE: This is a false positive or not exploitable\n"
+            "- UNCERTAIN: Need more context\n\n"
+            "Provide your verdict and reasoning in JSON format with fields:\n"
+            "- finding_id: reference to original finding\n"
+            "- verdict: CONFIRMED | REFUTED | UNCERTAIN\n"
+            "- explanation: detailed reasoning\n"
+            "- confidence: 0-100 (confidence in your verdict)"
+        ),
     )
 
     @agent.tool
-    def validate_finding(ctx: RunContext, finding_json: str, code_context: str) -> str:
+    def validate_finding(
+        _ctx: RunContext, _finding_json: str, code_context: str
+    ) -> str:
         """Validate a specific finding against code context."""
         logger.info("verifier_agent validating finding")
         return f"Validating finding with code context: {code_context[:300]}..."
@@ -151,22 +160,28 @@ def _build_reporter_agent() -> Agent:
     agent = Agent(
         model=MODEL_NAME,
         name="SecurityReporter",
-        system_prompt="""You are a security report generator. Your role is to aggregate verified findings and create clear, actionable Markdown reports for GitHub.
-
-Given a list of verified vulnerabilities, generate a professional Markdown summary that includes:
-1. Executive Summary (severity counts, risk level)
-2. Detailed Findings (grouped by severity)
-3. Remediation Recommendations (prioritized)
-4. Scan Metadata (timestamp, commit hash, etc.)
-
-Format the output as valid Markdown suitable for GitHub PR comments or issues.
-Use tables for findings and code blocks for examples.""",
+        system_prompt=(
+            "You are a security report generator. Your role is to aggregate "
+            "verified findings and create clear, actionable Markdown reports "
+            "for GitHub.\n\n"
+            "Given a list of verified vulnerabilities, generate a "
+            "professional Markdown summary that includes:\n"
+            "1. Executive Summary (severity counts, risk level)\n"
+            "2. Detailed Findings (grouped by severity)\n"
+            "3. Remediation Recommendations (prioritized)\n"
+            "4. Scan Metadata (timestamp, commit hash, etc.)\n\n"
+            "Format the output as valid Markdown suitable for GitHub PR "
+            "comments or issues.\n"
+            "Use tables for findings and code blocks for examples."
+        ),
     )
 
     @agent.tool
-    def format_findings(ctx: RunContext, findings_json: str, repo_name: str) -> str:
+    def format_findings(_ctx: RunContext, findings_json: str, repo_name: str) -> str:
         """Format findings into Markdown report."""
-        logger.info("reporter_agent formatting findings", extra={"repo_name": repo_name})
+        logger.info(
+            "reporter_agent formatting findings", extra={"repo_name": repo_name}
+        )
         return f"Formatting {len(findings_json)} findings for repository {repo_name}..."
 
     return agent
@@ -175,6 +190,12 @@ Use tables for findings and code blocks for examples.""",
 def _google_api_key_configured() -> bool:
     """Return whether model-backed scanning can run in this process."""
     return bool(os.environ.get("GOOGLE_API_KEY"))
+
+
+def _result_text(result: Any) -> str:
+    """Extract model text from a pydantic-ai run result without depending on stubs."""
+    data = getattr(result, "data", result)
+    return str(data)
 
 
 # ============================================================================
@@ -218,12 +239,12 @@ def _parse_hunter_findings(response_text: str) -> list[PotentialFinding]:
                         remediation=item.get("remediation", ""),
                     )
                 )
-            except Exception as e:
-                logger.warning(f"Failed to parse finding: {e}")
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("Failed to parse finding: %s", exc)
                 continue
 
-    except Exception as e:
-        logger.warning(f"Failed to parse hunter findings: {e}")
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Failed to parse hunter findings: %s", exc)
 
     return findings
 
@@ -239,8 +260,8 @@ def _parse_verifier_verdict(response_text: str) -> dict:
             end = response_text.rfind("}") + 1
             if start != -1:
                 verdict = json.loads(response_text[start:end])
-    except Exception as e:
-        logger.warning(f"Failed to parse verifier verdict: {e}")
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Failed to parse verifier verdict: %s", exc)
 
     return verdict
 
@@ -273,16 +294,20 @@ async def run_hunter_agent(diff_content: str, scan_id: str) -> list[PotentialFin
         )
 
         # Parse findings from response
-        findings = _parse_hunter_findings(result.data)
+        findings = _parse_hunter_findings(_result_text(result))
         logger.info(
-            f"Hunter found {len(findings)} potential vulnerabilities",
+            "Hunter found %s potential vulnerabilities",
+            len(findings),
             extra={"scan_id": scan_id, "finding_count": len(findings)},
         )
         return findings
 
-    except Exception as e:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error(
-            f"Hunter agent failed: {str(e)}", extra={"scan_id": scan_id}, exc_info=True
+            "Hunter agent failed: %s",
+            exc,
+            extra={"scan_id": scan_id},
+            exc_info=True,
         )
         return []
 
@@ -291,9 +316,7 @@ async def run_hunter_agent(diff_content: str, scan_id: str) -> list[PotentialFin
 async def run_verifier_agent(
     findings: list[PotentialFinding], diff_content: str, scan_id: str
 ) -> list[Finding]:
-    """Execute Verifier agent to validate findings (parallel processing).
-
-    Verifier processes all findings in parallel and returns only CONFIRMED findings as verified Finding objects.
+    """Execute Verifier agent to validate findings in parallel.
 
     Args:
         findings: List of unverified PotentialFinding objects from Hunter.
@@ -326,7 +349,8 @@ async def run_verifier_agent(
         for result in verified_results:
             if isinstance(result, Exception):
                 logger.warning(
-                    f"Verification task failed: {str(result)}",
+                    "Verification task failed: %s",
+                    result,
                     extra={"scan_id": scan_id},
                 )
                 continue
@@ -347,14 +371,17 @@ async def run_verifier_agent(
                 )
 
         logger.info(
-            f"Verifier processed {len(findings)} findings, confirmed {len(confirmed_findings)}",
+            "Verifier processed %s findings, confirmed %s",
+            len(findings),
+            len(confirmed_findings),
             extra={"scan_id": scan_id, "confirmed_count": len(confirmed_findings)},
         )
         return confirmed_findings
 
-    except Exception as e:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error(
-            f"Verifier agent failed: {str(e)}",
+            "Verifier agent failed: %s",
+            exc,
             extra={"scan_id": scan_id},
             exc_info=True,
         )
@@ -367,10 +394,12 @@ async def _verify_single_finding(
     """Verify a single finding using the Verifier agent."""
     try:
         result = await _build_verifier_agent().run(
-            f"Verify this security finding:\n{finding.model_dump_json()}\n\nCode context:\n{diff_content}"
+            "Verify this security finding:\n"
+            f"{finding.model_dump_json()}\n\n"
+            f"Code context:\n{diff_content}"
         )
 
-        verdict = _parse_verifier_verdict(result.data)
+        verdict = _parse_verifier_verdict(_result_text(result))
         verdict_obj = VerifiedResult(
             finding=finding,
             verdict=verdict.get("verdict", "UNCERTAIN"),
@@ -379,7 +408,8 @@ async def _verify_single_finding(
             trace_id=scan_id,
         )
         logger.info(
-            f"Finding verdict: {verdict_obj.verdict}",
+            "Finding verdict: %s",
+            verdict_obj.verdict,
             extra={
                 "scan_id": scan_id,
                 "vulnerability_type": finding.vulnerability_type,
@@ -388,9 +418,10 @@ async def _verify_single_finding(
         )
         return verdict_obj
 
-    except Exception as e:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning(
-            f"Verifier failed for finding: {str(e)}",
+            "Verifier failed for finding: %s",
+            exc,
             extra={"scan_id": scan_id, "finding_type": finding.vulnerability_type},
         )
         return None
@@ -424,22 +455,36 @@ async def run_reporter_agent(
             extra={"scan_id": scan_id},
         )
         return (
-            f"## Security Scan Report\nRepository: {repository}\nCommit: {commit_hash}\n"
-            f"Scan ID: {scan_id}\n\nModel-backed report generation skipped because GOOGLE_API_KEY is not configured."
+            "## Security Scan Report\n"
+            f"Repository: {repository}\n"
+            f"Commit: {commit_hash}\n"
+            f"Scan ID: {scan_id}\n\n"
+            "Model-backed report generation skipped because GOOGLE_API_KEY is "
+            "not configured."
         )
 
     try:
         findings_json = json.dumps([f.model_dump() for f in findings])
         result = await _build_reporter_agent().run(
-            f"Generate a GitHub-friendly Markdown report for:\nRepository: {repository}\nCommit: {commit_hash}\nFindings:\n{findings_json}"
+            "Generate a GitHub-friendly Markdown report for:\n"
+            f"Repository: {repository}\n"
+            f"Commit: {commit_hash}\n"
+            f"Findings:\n{findings_json}"
         )
         logger.info("Reporter generated Markdown summary", extra={"scan_id": scan_id})
-        return str(result.data)
+        return _result_text(result)
 
-    except Exception as e:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error(
-            f"Reporter agent failed: {str(e)}",
+            "Reporter agent failed: %s",
+            exc,
             extra={"scan_id": scan_id},
             exc_info=True,
         )
-        return f"## Security Scan Report\nRepository: {repository}\nCommit: {commit_hash}\nScan ID: {scan_id}\n\nReport generation failed. Please check logs."
+        return (
+            "## Security Scan Report\n"
+            f"Repository: {repository}\n"
+            f"Commit: {commit_hash}\n"
+            f"Scan ID: {scan_id}\n\n"
+            "Report generation failed. Please check logs."
+        )
