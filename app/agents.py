@@ -1,18 +1,15 @@
+
+
 """Pydantic-AI agent definitions for security orchestration."""
-
-import os
-
-# Strip whitespace from Gemini API key to prevent header errors
-gemini_api_key = os.environ.get("GEMINI_API_KEY")
-if gemini_api_key:
-    os.environ["GEMINI_API_KEY"] = gemini_api_key.strip()
 
 import asyncio
 import json
+import os
 from functools import wraps
 from typing import Any, Callable, TypeVar
 
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.gemini import GeminiModel
 
 from app.logging_config import get_logger
 from app.models import (
@@ -24,6 +21,17 @@ from app.models import (
 )
 
 logger = get_logger(__name__)
+
+# ============================================================================
+# LLM Configuration
+# ============================================================================
+
+# Strip whitespace from Gemini API key to prevent header errors
+gemini_api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+
+# Define the LLM to be used by all agents
+llm = GeminiModel("gemini-1.5-flash", api_key=gemini_api_key)
+
 
 # ============================================================================
 # RETRY DECORATOR: Exponential backoff for LLM calls
@@ -65,7 +73,7 @@ def retry_on_llm_error(
 # ============================================================================
 
 hunter_agent = Agent(
-    model="gemini-1.5-flash",
+    model=llm,
     name="SecurityHunter",
     system_prompt="""You are a security vulnerability hunter scanning code diffs for OWASP vulnerabilities.
 
@@ -104,7 +112,7 @@ def analyze_code_diff(ctx: RunContext, diff_content: str) -> str:
 # ============================================================================
 
 verifier_agent = Agent(
-    model="gemini-1.5-flash",
+    model=llm,
     name="SecurityVerifier",
     system_prompt="""You are an adversarial security verifier. Your role is to validate findings from the Hunter agent.
 
@@ -139,7 +147,7 @@ def validate_finding(ctx: RunContext, finding_json: str, code_context: str) -> s
 # ============================================================================
 
 reporter_agent = Agent(
-    model="gemini-1.5-flash",
+    model=llm,
     name="SecurityReporter",
     system_prompt="""You are a security report generator. Your role is to aggregate verified findings and create clear, actionable Markdown reports for GitHub.
 
