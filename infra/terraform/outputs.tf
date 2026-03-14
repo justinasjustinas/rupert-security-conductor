@@ -18,6 +18,11 @@ output "gemini_secret_id" {
   value       = google_secret_manager_secret.gemini_api_key.secret_id
 }
 
+output "scan_api_token_secret_id" {
+  description = "Secret Manager secret ID for the /scan bearer token"
+  value       = google_secret_manager_secret.scan_api_token.secret_id
+}
+
 output "github_actions_service_account_email" {
   description = "Email of the GitHub Actions deployer service account"
   value       = local.github_actions_enabled ? google_service_account.github_actions[0].email : null

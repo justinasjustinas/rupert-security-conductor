@@ -144,13 +144,11 @@ jobs:
         run: |
           docker build \
             -t ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:${{ github.sha }} \
-            -t ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:latest \
             .
 
       - name: Push to Artifact Registry
         run: |
           docker push ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:${{ github.sha }}
-          docker push ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:latest
 
   deploy:
     name: Deploy
@@ -188,7 +186,7 @@ jobs:
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy rupert-security-conductor \
-            --image=${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:latest \
+            --image=${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:${{ github.sha }} \
             --region=${{ env.GCP_REGION }} \
             --allow-unauthenticated \
             --set-env-vars="LOG_LEVEL=INFO"

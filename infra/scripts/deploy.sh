@@ -1,7 +1,7 @@
 #!/bin/bash
 # Deployment script for Rupert Security Conductor
 # Usage: ./deploy.sh <GCP_PROJECT_ID> [GCP_REGION] [IMAGE_TAG]
-# Example: ./deploy.sh my-project europe-west1 latest
+# Example: ./deploy.sh my-project europe-west1 build-20260314-120000
 
 set -e
 
@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 GCP_PROJECT_ID=${1:-}
 GCP_REGION=${2:-europe-west1}
-IMAGE_TAG=${3:-latest}
+IMAGE_TAG=${3:-}
 SERVICE_NAME="rupert-security-conductor"
 ARTIFACT_REGISTRY="security-conductor"
 IMAGE_NAME="security-conductor"
@@ -18,12 +18,44 @@ CLOUD_RUN_SERVICE_ACCOUNT_ID="${CLOUD_RUN_SERVICE_ACCOUNT_ID:-rupert-security-co
 GITHUB_ACTIONS_SERVICE_ACCOUNT_ID="${GITHUB_ACTIONS_SERVICE_ACCOUNT_ID:-rupert-github-actions}"
 ACTIVE_GCLOUD_ACCOUNT=""
 
+resolve_image_tag() {
+  if [ -n "${IMAGE_TAG}" ]; then
+    return
+  fi
+
+  local timestamp
+  local git_sha
+
+  timestamp=$(date -u +"%Y%m%d%H%M%S")
+  git_sha=$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo "manual")
+  IMAGE_TAG="${git_sha}-${timestamp}"
+}
+
 require_command() {
   local command_name=$1
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "Required command not found: $command_name"
     exit 1
   fi
+}
+
+wait_for_secret_version() {
+  local secret_name=$1
+  local max_attempts=10
+  local attempt=1
+
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if gcloud secrets versions access latest --secret="$secret_name" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    echo "   Waiting for secret version to become available: ${secret_name} (attempt ${attempt}/${max_attempts})"
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+
+  echo "Secret version for ${secret_name} was not available after waiting."
+  exit 1
 }
 
 preflight_check() {
@@ -104,6 +136,12 @@ import_existing_resources() {
       "projects/${GCP_PROJECT_ID}/secrets/rupert-gemini-api-key"
   fi
 
+  if gcloud secrets describe "rupert-scan-api-token" >/dev/null 2>&1; then
+    import_if_exists \
+      "google_secret_manager_secret.scan_api_token" \
+      "projects/${GCP_PROJECT_ID}/secrets/rupert-scan-api-token"
+  fi
+
   if [ -n "${GITHUB_REPOSITORY_OWNER:-}" ] && [ -n "${GITHUB_REPOSITORY_NAME:-}" ]; then
     if gcloud iam service-accounts describe "$github_actions_sa_email" >/dev/null 2>&1; then
       import_if_exists \
@@ -124,6 +162,12 @@ if [ -z "${GEMINI_API_KEY:-}" ]; then
   exit 1
 fi
 
+if [ -z "${SCAN_API_TOKEN:-}" ]; then
+  echo "SCAN_API_TOKEN must be set before deployment."
+  exit 1
+fi
+
+resolve_image_tag
 preflight_check
 
 echo "🚀 Deploying Rupert Security Conductor"
@@ -179,10 +223,16 @@ fi
 terraform apply "${TF_ARGS[@]}" \
   -target=google_artifact_registry_repository.docker_repo \
   -target=google_secret_manager_secret.gemini_api_key \
+  -target=google_secret_manager_secret.scan_api_token \
   -target=google_service_account.cloud_run
 
 echo "🔐 Adding Gemini API key to Secret Manager..."
 gcloud secrets versions add rupert-gemini-api-key --data-file=- <<< "$GEMINI_API_KEY"
+wait_for_secret_version "rupert-gemini-api-key"
+
+echo "🔐 Adding scan API token to Secret Manager..."
+gcloud secrets versions add rupert-scan-api-token --data-file=- <<< "$SCAN_API_TOKEN"
+wait_for_secret_version "rupert-scan-api-token"
 
 # Authenticate Docker for Artifact Registry (needed for buildx)
 echo "🔐 Configuring Artifact Registry authentication..."
@@ -212,15 +262,21 @@ echo "📋 Next steps:"
 echo "1. Get the service URL:"
 terraform output cloud_run_service_url
 echo ""
+echo "2. Test /scan with the bearer token you deployed:"
+echo "   curl -X POST \$(terraform output -raw cloud_run_service_url)/scan \\"
+echo "     -H \"Authorization: Bearer \$SCAN_API_TOKEN\" \\"
+echo "     -H \"Content-Type: application/json\" \\"
+echo "     -d '{\"repository\":\"test-repo\",\"branch\":\"main\",\"commit_hash\":\"abc123\",\"code_diff\":\"- const sql = \\\"SELECT * FROM users WHERE id = \\\" + userId;\",\"author\":\"manual\"}'"
+echo ""
 if [ -n "${GITHUB_REPOSITORY_OWNER:-}" ] && [ -n "${GITHUB_REPOSITORY_NAME:-}" ]; then
-  echo "2. Add these GitHub Actions secrets:"
+  echo "3. Add these GitHub Actions secrets:"
   echo "   GCP_PROJECT_ID=${GCP_PROJECT_ID}"
   echo "   WIF_PROVIDER=$(terraform output -raw github_workload_identity_provider)"
   echo "   WIF_SERVICE_ACCOUNT=$(terraform output -raw github_actions_service_account_email)"
   echo ""
 fi
 
-echo "3. Optional least-privilege cleanup for the bootstrap account (${ACTIVE_GCLOUD_ACCOUNT}):"
+echo "4. Optional least-privilege cleanup for the bootstrap account (${ACTIVE_GCLOUD_ACCOUNT}):"
 echo "   After verifying deploys work through GitHub Actions, remove the temporary bootstrap roles:"
 echo "   gcloud projects remove-iam-policy-binding ${GCP_PROJECT_ID} --member=\"user:${ACTIVE_GCLOUD_ACCOUNT}\" --role=\"roles/artifactregistry.admin\""
 echo "   gcloud projects remove-iam-policy-binding ${GCP_PROJECT_ID} --member=\"user:${ACTIVE_GCLOUD_ACCOUNT}\" --role=\"roles/secretmanager.admin\""

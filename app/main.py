@@ -1,11 +1,12 @@
 """FastAPI application for GCP Cloud Run deployment."""
 
+import hmac
 import json
 import os
 import uuid
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.agents import (
@@ -32,6 +33,25 @@ app = FastAPI(
 )
 
 
+def _scan_api_token() -> str:
+    """Return the configured bearer token for /scan."""
+    return os.getenv("SCAN_API_TOKEN", "").strip()
+
+
+def _verify_scan_authorization(authorization: str | None) -> None:
+    """Require a bearer token for manual /scan access when configured."""
+    expected_token = _scan_api_token()
+    if not expected_token:
+        return
+
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    provided_token = authorization.removeprefix("Bearer ").strip()
+    if not hmac.compare_digest(provided_token, expected_token):
+        raise HTTPException(status_code=401, detail="Invalid bearer token")
+
+
 # ============================================================================
 # ENDPOINTS
 # ============================================================================
@@ -48,8 +68,12 @@ async def health_check() -> HealthResponse:
 
 
 @app.post("/scan", response_model=ScanResult)
-async def start_scan(request: ScanRequest) -> ScanResult:
+async def start_scan(
+    request: ScanRequest, authorization: str | None = Header(default=None)
+) -> ScanResult:
     """Initiate a security scan with code diff."""
+    _verify_scan_authorization(authorization)
+
     scan_id = str(uuid.uuid4())
     logger.info(
         "Scan initiated",

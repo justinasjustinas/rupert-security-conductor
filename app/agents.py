@@ -17,14 +17,26 @@ from app.models import (
     VulnerabilityType,
 )
 
-# Strip whitespace from Gemini API key to prevent header errors
-gemini_api_key = os.environ.get("GEMINI_API_KEY")
+# Normalize API key env vars for local dev and Cloud Run.
+# `pydantic-ai`'s Google provider expects `GOOGLE_API_KEY`, while some of this
+# repo's older setup used `GEMINI_API_KEY`.
+gemini_api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+google_api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+
 if gemini_api_key:
-    os.environ["GEMINI_API_KEY"] = gemini_api_key.strip()
+    os.environ["GEMINI_API_KEY"] = gemini_api_key
+if google_api_key:
+    os.environ["GOOGLE_API_KEY"] = google_api_key
+if gemini_api_key and not google_api_key:
+    os.environ["GOOGLE_API_KEY"] = gemini_api_key
+if google_api_key and not gemini_api_key:
+    os.environ["GEMINI_API_KEY"] = google_api_key
 
 logger = get_logger(__name__)
 
-MODEL_NAME = "google-gla:gemini-1.5-flash"
+MODEL_NAME = os.environ.get(
+    "GOOGLE_MODEL", "google-gla:gemini-3-flash-preview"
+).strip()
 
 # ============================================================================
 # RETRY DECORATOR: Exponential backoff for LLM calls
@@ -94,8 +106,33 @@ def _build_hunter_agent() -> Agent:
             "- Clear description of the vulnerability\n"
             "- Evidence from the code\n"
             "- Recommended remediation\n\n"
-            "Return a JSON array of findings. If no vulnerabilities found, "
-            "return empty array []."
+            "Return only valid JSON. Do not include markdown fences, prose, "
+            "or any text before or after the JSON.\n"
+            "The response must be a JSON array where each item has exactly "
+            "these keys:\n"
+            "- vulnerability_type\n"
+            "- severity\n"
+            "- file_path\n"
+            "- line_number\n"
+            "- description\n"
+            "- evidence\n"
+            "- remediation\n\n"
+            "Valid vulnerability_type values:\n"
+            "- SQL_INJECTION\n"
+            "- CROSS_SITE_SCRIPTING\n"
+            "- AUTHENTICATION_BYPASS\n"
+            "- INSECURE_TRANSMISSION\n"
+            "- BROKEN_CRYPTOGRAPHY\n"
+            "- LOGIC_FLAW\n"
+            "- INJECTION\n"
+            "- OTHER\n\n"
+            "Valid severity values:\n"
+            "- CRITICAL\n"
+            "- HIGH\n"
+            "- MEDIUM\n"
+            "- LOW\n"
+            "- INFO\n\n"
+            "If no vulnerabilities are found, return exactly []."
         ),
     )
 
@@ -189,13 +226,20 @@ def _build_reporter_agent() -> Agent:
 
 def _google_api_key_configured() -> bool:
     """Return whether model-backed scanning can run in this process."""
-    return bool(os.environ.get("GOOGLE_API_KEY"))
+    return bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
 
 
 def _result_text(result: Any) -> str:
     """Extract model text from a pydantic-ai run result without depending on stubs."""
-    data = getattr(result, "data", result)
-    return str(data)
+    output = getattr(result, "output", None)
+    if output is not None:
+        return str(output)
+
+    data = getattr(result, "data", None)
+    if data is not None:
+        return str(data)
+
+    return str(result)
 
 
 # ============================================================================
@@ -206,23 +250,31 @@ def _result_text(result: Any) -> str:
 def _parse_hunter_findings(response_text: str) -> list[PotentialFinding]:
     """Parse Hunter agent response into PotentialFinding objects."""
     findings = []
+    response_preview = str(response_text).strip()
 
     try:
-        # Try to extract JSON from response
-        response_text = str(response_text).strip()
+        response_text = response_preview
+        findings_data: list[dict[str, Any]] = []
+
         if response_text.startswith("["):
             findings_data = json.loads(response_text)
         else:
-            # Try to extract JSON from markdown code block
-            if "```json" in response_text or "```" in response_text:
-                start = response_text.find("[")
-                end = response_text.rfind("]") + 1
-                if start != -1 and end > start:
-                    findings_data = json.loads(response_text[start:end])
-                else:
-                    findings_data = []
-            else:
-                findings_data = []
+            code_block_start = response_text.find("```")
+            if code_block_start != -1:
+                first_newline = response_text.find("\n", code_block_start)
+                code_block_end = response_text.rfind("```")
+                if first_newline != -1 and code_block_end > first_newline:
+                    fenced_content = response_text[first_newline:code_block_end].strip()
+                    if fenced_content.startswith("["):
+                        findings_data = json.loads(fenced_content)
+
+            if not findings_data:
+                array_start = response_text.find("[")
+                array_end = response_text.rfind("]")
+                if array_start != -1 and array_end > array_start:
+                    findings_data = json.loads(
+                        response_text[array_start : array_end + 1]
+                    )
 
         for item in findings_data or []:
             try:
@@ -244,7 +296,13 @@ def _parse_hunter_findings(response_text: str) -> list[PotentialFinding]:
                 continue
 
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning("Failed to parse hunter findings: %s", exc)
+        logger.warning(
+            "Failed to parse hunter findings: %s",
+            exc,
+            extra={
+                "hunter_response_preview": response_preview[:2000],
+            },
+        )
 
     return findings
 
@@ -282,7 +340,7 @@ async def run_hunter_agent(diff_content: str, scan_id: str) -> list[PotentialFin
 
     if not _google_api_key_configured():
         logger.warning(
-            "Skipping hunter agent: GOOGLE_API_KEY is not configured",
+            "Skipping hunter agent: no Google/Gemini API key is configured",
             extra={"scan_id": scan_id},
         )
         return []
@@ -451,7 +509,7 @@ async def run_reporter_agent(
 
     if not _google_api_key_configured():
         logger.warning(
-            "Skipping reporter agent: GOOGLE_API_KEY is not configured",
+            "Skipping reporter agent: no Google/Gemini API key is configured",
             extra={"scan_id": scan_id},
         )
         return (
@@ -459,8 +517,8 @@ async def run_reporter_agent(
             f"Repository: {repository}\n"
             f"Commit: {commit_hash}\n"
             f"Scan ID: {scan_id}\n\n"
-            "Model-backed report generation skipped because GOOGLE_API_KEY is "
-            "not configured."
+            "Model-backed report generation skipped because no Google/Gemini "
+            "API key is configured."
         )
 
     try:
