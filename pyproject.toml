@@ -32,22 +32,23 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastapi==0.109.0",
-    "uvicorn[standard]==0.27.0",
-    "pydantic==2.5.3",
-    "pydantic-ai==0.0.10",
-    "google-cloud-logging==3.8.0",
-    "google-cloud-secret-manager==2.16.4",
-    "google-cloud-storage==2.10.0",
-    "python-dotenv==1.0.0",
-    "httpx==0.25.2"
+    "fastapi==0.115.14",
+    "uvicorn[standard]==0.35.0",
+    "pydantic==2.12.5",
+    "pydantic-ai-slim[google]==1.68.0",
+    "griffe==0.40.1",
+    "google-cloud-logging==3.9.0",
+    "google-cloud-secret-manager==2.19.0",
+    "google-cloud-storage==2.16.0",
+    "python-dotenv==1.1.0",
+    "httpx==0.28.1"
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest==7.4.3",
-    "pytest-asyncio==0.21.1",
-    "pytest-cov==4.1.0",
+    "pytest==8.1.1",
+    "pytest-asyncio==0.23.6",
+    "pytest-cov==5.0.0",
 ]
 
 [project.urls]
