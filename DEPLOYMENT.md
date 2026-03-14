@@ -137,7 +137,7 @@ These values are used to scope GitHub Workload Identity Federation to one reposi
 From the repo root:
 
 ```bash
-cd /Users/justinas/Workspace/rupert-security-conductor
+cd /Users/yourUsernameHere/Workspace/rupert-security-conductor
 bash infra/scripts/deploy.sh "$GCP_PROJECT_ID" "$GCP_REGION"
 ```
 
@@ -194,7 +194,7 @@ After `deploy.sh` finishes, it prints the values you need.
 You can also fetch them manually:
 
 ```bash
-cd /Users/justinas/Workspace/rupert-security-conductor/infra/terraform
+cd /Users/yourUsernameHere/Workspace/rupert-security-conductor/infra/terraform
 terraform output -raw github_workload_identity_provider
 terraform output -raw github_actions_service_account_email
 ```
@@ -211,7 +211,7 @@ Create these repository secrets:
 
 Push a commit to `main` or `develop`.
 
-The workflow at [.github/workflows/ci-cd.yml](/Users/justinas/Workspace/rupert-security-conductor/.github/workflows/ci-cd.yml) should:
+The workflow at [.github/workflows/ci-cd.yml](/Users/yourUsernameHere/Workspace/rupert-security-conductor/.github/workflows/ci-cd.yml) should:
 - run tests
 - authenticate to GCP with WIF
 - build and push the image
@@ -249,7 +249,7 @@ To delete the infrastructure created by this repo without deleting the whole
 GCP project:
 
 ```bash
-cd /Users/justinas/Workspace/rupert-security-conductor
+cd /Users/yourUsernameHere/Workspace/rupert-security-conductor
 bash infra/scripts/destroy.sh "$GCP_PROJECT_ID" "$GCP_REGION"
 ```
 
@@ -313,14 +313,14 @@ gcloud logging read "resource.labels.service_name=rupert-security-conductor" \
 Re-run Terraform outputs:
 
 ```bash
-cd /Users/justinas/Workspace/rupert-security-conductor/infra/terraform
+cd /Users/yourUsernameHere/Workspace/rupert-security-conductor/infra/terraform
 terraform output
 ```
 
 Destroy managed resources:
 
 ```bash
-cd /Users/justinas/Workspace/rupert-security-conductor/infra/terraform
+cd /Users/yourUsernameHere/Workspace/rupert-security-conductor/infra/terraform
 terraform destroy -auto-approve \
   -var="gcp_project_id=$GCP_PROJECT_ID" \
   -var="gcp_region=$GCP_REGION"
