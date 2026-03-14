@@ -2,7 +2,7 @@
 
 AI-powered code-diff security scanning with FastAPI, Pydantic-AI, Google Gemini, and GCP Cloud Run.
 
-See [DEPLOYMENT.md](/Users/justinas/Workspace/rupert-security-conductor/DEPLOYMENT.md) for the full deployment walkthrough.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the full deployment walkthrough.
 
 ## What It Does
 
@@ -28,7 +28,7 @@ Requirements:
 Setup:
 
 ```bash
-cd /Users/justinas/Workspace/rupert-security-conductor
+cd /Users/yourUsernameHere/Workspace/rupert-security-conductor
 bash infra/scripts/setup-dev.sh
 source venv/bin/activate
 export GEMINI_API_KEY="your-api-key"
@@ -53,7 +53,7 @@ The deployment flow is:
 6. Add the generated WIF values to GitHub Actions secrets.
 7. Remove the temporary bootstrap IAM from your human account after CI/CD is working.
 
-That step-by-step version lives in [DEPLOYMENT.md](/Users/justinas/Workspace/rupert-security-conductor/DEPLOYMENT.md).
+That step-by-step version lives in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Security Notes
 
@@ -91,7 +91,7 @@ gcloud logging read "resource.labels.service_name=rupert-security-conductor" \
 Destroy managed resources:
 
 ```bash
-cd /Users/justinas/Workspace/rupert-security-conductor/infra/terraform
+cd /Users/yourUsernameHere/Workspace/rupert-security-conductor/infra/terraform
 terraform destroy -auto-approve \
   -var="gcp_project_id=$GCP_PROJECT_ID" \
   -var="gcp_region=$GCP_REGION"
