@@ -2,115 +2,193 @@ name: CI/CD
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
 
 env:
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GCP_REGION: europe-west1
   REGISTRY: europe-west1-docker.pkg.dev
 
 jobs:
-  test:
+  requirements:
+    name: Requirements
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.12']
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-asyncio pytest-cov
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pylint mypy
 
-    - name: Lint with pylint
-      run: pylint app/ || true
-      continue-on-error: true
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    needs: requirements
 
-    - name: Type check with mypy
-      run: mypy app/ || true
-      continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
 
-    - name: Run tests
-      run: pytest -v --cov=app
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
 
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        files: ./coverage.xml
-        fail_ci_if_error: false
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pylint
+
+      - name: Run pylint
+        run: pylint app/
+
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    needs: requirements
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install mypy
+
+      - name: Run mypy
+        run: mypy app/
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: requirements
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest -v --cov=app
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
 
   build:
-    needs: test
+    name: Build Image
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && secrets.GCP_PROJECT_ID != '' && secrets.WIF_PROVIDER != '' && secrets.WIF_SERVICE_ACCOUNT != ''
+    needs: [requirements, lint, typecheck, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     permissions:
-      contents: 'read'
-      id-token: 'write'
+      contents: read
+      id-token: write
+
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v1
-      with:
-        workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-        service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+      - name: Validate deploy secrets
+        run: |
+          test -n "$GCP_PROJECT_ID"
+          test -n "$WIF_PROVIDER"
+          test -n "$WIF_SERVICE_ACCOUNT"
 
-    - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v1
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
 
-    - name: Configure Docker authentication
-      run: gcloud auth configure-docker ${{ env.REGISTRY }}
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
 
-    - name: Build Docker image
-      run: |
-        docker build -t ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:${{ github.sha }} \
-          -t ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:latest \
-          .
+      - name: Configure Docker authentication
+        run: gcloud auth configure-docker ${{ env.REGISTRY }}
 
-    - name: Push to Artifact Registry
-      if: github.ref == 'refs/heads/main'
-      run: |
-        docker push ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:${{ github.sha }}
-        docker push ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:latest
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:latest \
+            .
+
+      - name: Push to Artifact Registry
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:latest
 
   deploy:
-    needs: build
+    name: Deploy
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.GCP_PROJECT_ID != '' && secrets.WIF_PROVIDER != '' && secrets.WIF_SERVICE_ACCOUNT != ''
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     permissions:
-      contents: 'read'
-      id-token: 'write'
+      contents: read
+      id-token: write
+
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v1
-      with:
-        workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-        service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+      - name: Validate deploy secrets
+        run: |
+          test -n "$GCP_PROJECT_ID"
+          test -n "$WIF_PROVIDER"
+          test -n "$WIF_SERVICE_ACCOUNT"
 
-    - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v1
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
 
-    - name: Deploy to Cloud Run
-      run: |
-        gcloud run deploy rupert-security-conductor \
-          --image=${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:latest \
-          --region=${{ env.GCP_REGION }} \
-          --allow-unauthenticated \
-          --set-env-vars="LOG_LEVEL=INFO"
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy rupert-security-conductor \
+            --image=${{ env.REGISTRY }}/${{ env.GCP_PROJECT_ID }}/security-conductor/security-conductor:latest \
+            --region=${{ env.GCP_REGION }} \
+            --allow-unauthenticated \
+            --set-env-vars="LOG_LEVEL=INFO"

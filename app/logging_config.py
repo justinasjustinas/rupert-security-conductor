@@ -25,12 +25,14 @@ class CloudLoggingFormatter(logging.Formatter):
         }
 
         # Add scan_id from context if available
-        if hasattr(record, "scan_id") and record.scan_id:  # type: ignore
-            log_obj["scan_id"] = record.scan_id  # type: ignore
+        scan_id = getattr(record, "scan_id", None)
+        if scan_id:
+            log_obj["scan_id"] = scan_id
 
         # Add trace context for Cloud Trace integration
-        if hasattr(record, "trace_id") and record.trace_id:  # type: ignore
-            log_obj["trace_id"] = record.trace_id  # type: ignore
+        trace_id = getattr(record, "trace_id", None)
+        if trace_id:
+            log_obj["trace_id"] = trace_id
 
         # Include exception traceback if present
         if record.exc_info:
@@ -104,11 +106,12 @@ class LogContext:
         self.logger = logger
         self.scan_id = scan_id
         self.trace_id = trace_id
-        self._filters = []
+        self._filters: list[tuple[logging.Handler, logging.Filter]] = []
 
     def __enter__(self) -> "LogContext":
         """Add context to all handlers."""
 
+        # pylint: disable=too-few-public-methods
         class ContextFilter(logging.Filter):
             """Filter to inject scan_id and trace_id into log records."""
 
@@ -118,8 +121,8 @@ class LogContext:
                 self.trace_id = trace_id
 
             def filter(self, record: logging.LogRecord) -> bool:
-                record.scan_id = self.scan_id  # type: ignore
-                record.trace_id = self.trace_id  # type: ignore
+                setattr(record, "scan_id", self.scan_id)
+                setattr(record, "trace_id", self.trace_id)
                 return True
 
         # Create single filter instance with context

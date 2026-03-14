@@ -67,16 +67,17 @@ async def start_scan(request: ScanRequest) -> ScanResult:
         )
         return result
 
-    except Exception as e:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error(
-            f"Scan failed: {str(e)}",
+            "Scan failed: %s",
+            exc,
             extra={"scan_id": scan_id},
             exc_info=True,
         )
         raise HTTPException(
             status_code=500,
-            detail=f"Scan orchestration failed: {str(e)}",
-        )
+            detail=f"Scan orchestration failed: {str(exc)}",
+        ) from exc
 
 
 @app.post("/webhook/github")
@@ -139,16 +140,17 @@ async def github_webhook(request: Request) -> JSONResponse:
             status_code=202,
         )
 
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
         logger.error("Invalid JSON in webhook payload", extra={"scan_id": scan_id})
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
-    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error(
-            f"Webhook processing failed: {str(e)}",
+            "Webhook processing failed: %s",
+            exc,
             extra={"scan_id": scan_id},
             exc_info=True,
         )
-        raise HTTPException(status_code=500, detail="Webhook processing failed")
+        raise HTTPException(status_code=500, detail="Webhook processing failed") from exc
 
 
 @app.post("/webhook/bitbucket")
@@ -202,13 +204,14 @@ async def bitbucket_webhook(request: Request) -> JSONResponse:
             status_code=202,
         )
 
-    except Exception as e:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error(
-            f"Bitbucket webhook failed: {str(e)}",
+            "Bitbucket webhook failed: %s",
+            exc,
             extra={"scan_id": scan_id},
             exc_info=True,
         )
-        raise HTTPException(status_code=500, detail="Webhook processing failed")
+        raise HTTPException(status_code=500, detail="Webhook processing failed") from exc
 
 
 # ============================================================================
@@ -245,11 +248,16 @@ async def orchestrate_security_scan(
         await run_reporter_agent(verified_findings, repository, commit_hash, scan_id)
 
         # Count findings by severity
-        critical = sum(1 for f in verified_findings if f.severity == Severity.CRITICAL)
+        critical = sum(
+            1 for f in verified_findings if f.severity == Severity.CRITICAL
+        )
         high = sum(1 for f in verified_findings if f.severity == Severity.HIGH)
 
         # Generate summary
-        summary = f"Found {len(verified_findings)} security issue(s): {critical} critical, {high} high"
+        summary = (
+            f"Found {len(verified_findings)} security issue(s): "
+            f"{critical} critical, {high} high"
+        )
 
         logger.info(
             "Security orchestration complete",
