@@ -26,22 +26,22 @@ setup:
 	bash infra/scripts/setup-dev.sh
 
 dev:
-	source venv/bin/activate && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	source .venv/bin/activate && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 dev-docker:
 	docker-compose up --build
 
 test:
-	source venv/bin/activate && pytest -v --cov=app
+	source .venv/bin/activate && pytest -v --cov=app
 
 format:
-	source venv/bin/activate && black app/ infra/
+	source .venv/bin/activate && black app/ infra/
 
 lint:
-	source venv/bin/activate && pylint app/ || true
+	source .venv/bin/activate && pylint app/ || true
 
 type-check:
-	source venv/bin/activate && mypy app/ || true
+	source .venv/bin/activate && mypy app/ || true
 
 build:
 	docker build -t security-conductor:latest .
@@ -86,7 +86,7 @@ clean:
 	rm -rf .coverage htmlcov/
 
 clean-all: clean
-	rm -rf venv/
+	rm -rf .venv/
 	rm -rf build/ dist/ *.egg-info
 
 .DEFAULT_GOAL := help

@@ -17,3 +17,12 @@ cloud_run_memory       = "512Mi"
 cloud_run_cpu          = "0.5"
 cloud_run_timeout      = 300
 cloud_run_max_instances = 10
+
+# Optional features — uncomment and set to true to enable.
+# deploy.sh sets these automatically based on which env vars are present,
+# so you only need these if you are running Terraform directly.
+
+# enable_github_webhook    = false
+# enable_bitbucket_webhook = false
+# enable_github_token      = false
+# gcs_bucket_name          = ""

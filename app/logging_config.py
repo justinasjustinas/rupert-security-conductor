@@ -128,8 +128,10 @@ class LogContext:
         # Create single filter instance with context
         filter_obj = ContextFilter(self.scan_id, self.trace_id)
 
-        # Add filter to all handlers
-        for handler in self.logger.handlers:
+        # Named loggers propagate to the root logger and have no handlers of
+        # their own, so we must attach the filter to the root logger's handlers.
+        root = logging.getLogger()
+        for handler in root.handlers:
             handler.addFilter(filter_obj)
             self._filters.append((handler, filter_obj))
 

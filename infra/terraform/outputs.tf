@@ -23,6 +23,21 @@ output "scan_api_token_secret_id" {
   value       = google_secret_manager_secret.scan_api_token.secret_id
 }
 
+output "github_webhook_secret_id" {
+  description = "Secret Manager secret ID for the GitHub webhook HMAC secret (null if not enabled)"
+  value       = local.github_webhook_enabled ? google_secret_manager_secret.github_webhook_secret[0].secret_id : null
+}
+
+output "bitbucket_webhook_secret_id" {
+  description = "Secret Manager secret ID for the Bitbucket webhook HMAC secret (null if not enabled)"
+  value       = local.bitbucket_webhook_enabled ? google_secret_manager_secret.bitbucket_webhook_secret[0].secret_id : null
+}
+
+output "github_token_secret_id" {
+  description = "Secret Manager secret ID for the GitHub API token (null if not enabled)"
+  value       = local.github_token_enabled ? google_secret_manager_secret.github_token[0].secret_id : null
+}
+
 output "github_actions_service_account_email" {
   description = "Email of the GitHub Actions deployer service account"
   value       = local.github_actions_enabled ? google_service_account.github_actions[0].email : null

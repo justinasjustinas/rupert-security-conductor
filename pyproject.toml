@@ -37,7 +37,6 @@ dependencies = [
     "pydantic==2.12.5",
     "pydantic-ai-slim[google]==1.68.0",
     "google-cloud-logging==3.9.0",
-    "google-cloud-secret-manager==2.19.0",
     "google-cloud-storage==2.16.0",
     "python-dotenv==1.1.0",
     "httpx==0.28.1"
