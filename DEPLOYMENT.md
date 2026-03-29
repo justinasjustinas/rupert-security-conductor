@@ -11,6 +11,8 @@ You need:
 - a GCP project with billing enabled
 - a Gemini API key
 - a bearer token for manual `/scan` access
+- a GitHub personal access token (for webhook diff fetching)
+- a GCS bucket name for scan result persistence
 
 Default region used in this repo:
 
@@ -110,16 +112,63 @@ export GEMINI_API_KEY="your-api-key"
 Choose a long random token for manual testing of `/scan`:
 
 ```bash
-export SCAN_API_TOKEN="replace-this-with-a-long-random-string"
+export SCAN_API_TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 ```
 
-The deployed app will require:
+The deployed app requires:
 
 ```bash
 Authorization: Bearer $SCAN_API_TOKEN
 ```
 
-for direct calls to `/scan`.
+for direct calls to `/scan`. If `SCAN_API_TOKEN` is not set and `SCAN_AUTH_DISABLED` is
+not `true`, the endpoint returns 503.
+
+## Step 6a: Set Webhook Secrets
+
+Generate a separate secret for each webhook source:
+
+```bash
+export GITHUB_WEBHOOK_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+export BITBUCKET_WEBHOOK_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+```
+
+These are used to verify the HMAC-SHA256 signatures on incoming webhook payloads.
+The app rejects webhooks if the matching secret env var is not configured.
+
+You will enter these same values when configuring the webhook in GitHub/Bitbucket
+(see the Webhooks section below).
+
+## Step 6b: Set a GitHub Token
+
+The webhook handler fetches the commit diff from the GitHub API automatically.
+Without a token, public-repo diffs work (unauthenticated) but rate limits are tighter.
+Private repos require a token with the `repo` read scope.
+
+```bash
+export GITHUB_TOKEN="ghp_your_token_here"
+```
+
+## Step 6b: Create a GCS Bucket for Scan Persistence
+
+Scan results (JSON) and Markdown reports are stored under
+`gs://<bucket>/scans/<scan_id>/` after each run. Create the bucket:
+
+```bash
+export GCS_BUCKET_NAME="rupert-scans-$GCP_PROJECT_ID"
+
+gcloud storage buckets create "gs://$GCS_BUCKET_NAME" \
+  --location="$GCP_REGION" \
+  --uniform-bucket-level-access
+```
+
+Then grant the Cloud Run service account write access:
+
+```bash
+gcloud storage buckets add-iam-policy-binding "gs://$GCS_BUCKET_NAME" \
+  --member="serviceAccount:rupert-security-conductor@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/storage.objectCreator"
+```
 
 ## Step 7: Set GitHub Repository Coordinates
 
@@ -137,7 +186,7 @@ These values are used to scope GitHub Workload Identity Federation to one reposi
 From the repo root:
 
 ```bash
-cd /Users/yourUsernameHere/Workspace/rupert-security-conductor
+cd rupert-security-conductor
 bash infra/scripts/deploy.sh "$GCP_PROJECT_ID" "$GCP_REGION"
 ```
 
@@ -150,7 +199,7 @@ What `deploy.sh` does:
 2. Enables required APIs.
 3. Imports existing bootstrap resources into Terraform state if they already exist.
 4. Creates bootstrap infrastructure with Terraform.
-5. Writes the current `GEMINI_API_KEY` and `SCAN_API_TOKEN` into Secret Manager.
+5. Writes the current `GEMINI_API_KEY`, `SCAN_API_TOKEN`, `GITHUB_TOKEN`, and `GCS_BUCKET_NAME` into Secret Manager.
 6. Builds and pushes the Docker image.
 7. Applies the full Terraform stack.
 
@@ -194,7 +243,7 @@ After `deploy.sh` finishes, it prints the values you need.
 You can also fetch them manually:
 
 ```bash
-cd /Users/yourUsernameHere/Workspace/rupert-security-conductor/infra/terraform
+cd infra/terraform
 terraform output -raw github_workload_identity_provider
 terraform output -raw github_actions_service_account_email
 ```
@@ -211,7 +260,7 @@ Create these repository secrets:
 
 Push a commit to `main` or `develop`.
 
-The workflow at [.github/workflows/ci-cd.yml](/Users/yourUsernameHere/Workspace/rupert-security-conductor/.github/workflows/ci-cd.yml) should:
+The workflow at [.github/workflows/ci-cd.yml](.github/workflows/ci-cd.yml) should:
 - run tests
 - authenticate to GCP with WIF
 - build and push the image
@@ -249,7 +298,7 @@ To delete the infrastructure created by this repo without deleting the whole
 GCP project:
 
 ```bash
-cd /Users/yourUsernameHere/Workspace/rupert-security-conductor
+cd rupert-security-conductor
 bash infra/scripts/destroy.sh "$GCP_PROJECT_ID" "$GCP_REGION"
 ```
 
@@ -273,17 +322,37 @@ bash infra/scripts/deploy.sh "$GCP_PROJECT_ID" "$GCP_REGION"
 
 ## Webhooks
 
+Both webhook endpoints return **202 Accepted** immediately and process the scan
+in a background task. Use the `scan_id` in the response to find the result in GCS
+at `gs://$GCS_BUCKET_NAME/scans/<scan_id>/`.
+
 GitHub:
 1. Open your repository settings.
 2. Go to `Webhooks`.
 3. Add a webhook pointing to:
    `https://<SERVICE_URL>/webhook/github`
+4. Set content type to `application/json`.
+5. Enter your `GITHUB_WEBHOOK_SECRET` value in the **Secret** field.
+6. Select the **Push** event (or "Just the push event").
+
+GitHub will sign every delivery with `X-Hub-Signature-256`. The app verifies
+this signature and rejects requests that do not match. The diff is fetched
+automatically from the GitHub API — you do **not** need to include `diff_content`
+in the payload.
 
 Bitbucket:
 1. Open repository settings.
 2. Go to `Webhooks`.
 3. Add a webhook pointing to:
    `https://<SERVICE_URL>/webhook/bitbucket`
+4. Enter your `BITBUCKET_WEBHOOK_SECRET` value in the **Secret** field.
+5. Select the **Push** trigger.
+
+Bitbucket will sign every delivery with `X-Hub-Signature`. The app verifies
+this signature and rejects requests that do not match.
+
+Note: Bitbucket webhooks do not include a diff. The `diff_content` field must
+be provided in the payload by your CI pipeline, or the scan will be skipped.
 
 ## Troubleshooting
 
@@ -313,14 +382,14 @@ gcloud logging read "resource.labels.service_name=rupert-security-conductor" \
 Re-run Terraform outputs:
 
 ```bash
-cd /Users/yourUsernameHere/Workspace/rupert-security-conductor/infra/terraform
+cd infra/terraform
 terraform output
 ```
 
 Destroy managed resources:
 
 ```bash
-cd /Users/yourUsernameHere/Workspace/rupert-security-conductor/infra/terraform
+cd infra/terraform
 terraform destroy -auto-approve \
   -var="gcp_project_id=$GCP_PROJECT_ID" \
   -var="gcp_region=$GCP_REGION"

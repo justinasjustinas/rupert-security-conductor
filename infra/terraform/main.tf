@@ -27,15 +27,18 @@ provider "google" {
 }
 
 locals {
-  github_actions_enabled = var.github_repository_owner != "" && var.github_repository_name != ""
-  github_repository      = "${var.github_repository_owner}/${var.github_repository_name}"
+  github_actions_enabled    = var.github_repository_owner != "" && var.github_repository_name != ""
+  github_repository         = "${var.github_repository_owner}/${var.github_repository_name}"
+  github_webhook_enabled    = var.enable_github_webhook
+  bitbucket_webhook_enabled = var.enable_bitbucket_webhook
+  github_token_enabled      = var.enable_github_token
+  gcs_enabled               = var.gcs_bucket_name != ""
 }
 
 # ============================================================================
 # ARTIFACT REGISTRY: Docker image repository
 # ============================================================================
 
-# Managed by Terraform so a fresh project can be bootstrapped end-to-end.
 resource "google_artifact_registry_repository" "docker_repo" {
   location      = var.gcp_region
   repository_id = var.artifact_registry_repo
@@ -58,7 +61,10 @@ resource "google_service_account" "github_actions" {
   display_name = "Rupert GitHub Actions deployer"
 }
 
-# Allow Cloud Run to read from Artifact Registry
+# ============================================================================
+# IAM: Cloud Run runtime permissions
+# ============================================================================
+
 resource "google_artifact_registry_repository_iam_member" "cloud_run_reader" {
   location   = google_artifact_registry_repository.docker_repo.location
   repository = google_artifact_registry_repository.docker_repo.repository_id
@@ -66,7 +72,13 @@ resource "google_artifact_registry_repository_iam_member" "cloud_run_reader" {
   member     = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
-# Allow Cloud Run to access Secret Manager for API keys
+resource "google_project_iam_member" "cloud_run_logging" {
+  project = var.gcp_project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Required secrets: Gemini API key and /scan bearer token
 resource "google_secret_manager_secret_iam_member" "gemini_api_key" {
   secret_id = google_secret_manager_secret.gemini_api_key.id
   role      = "roles/secretmanager.secretAccessor"
@@ -79,26 +91,42 @@ resource "google_secret_manager_secret_iam_member" "scan_api_token" {
   member    = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
+# Optional: GitHub webhook secret
 resource "google_secret_manager_secret_iam_member" "github_webhook_secret" {
-  secret_id = google_secret_manager_secret.github_webhook_secret.id
+  count     = local.github_webhook_enabled ? 1 : 0
+  secret_id = google_secret_manager_secret.github_webhook_secret[0].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
+# Optional: Bitbucket webhook secret
 resource "google_secret_manager_secret_iam_member" "bitbucket_webhook_secret" {
-  secret_id = google_secret_manager_secret.bitbucket_webhook_secret.id
+  count     = local.bitbucket_webhook_enabled ? 1 : 0
+  secret_id = google_secret_manager_secret.bitbucket_webhook_secret[0].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
-# Allow Cloud Run to write logs
-resource "google_project_iam_member" "cloud_run_logging" {
-  project = var.gcp_project_id
-  role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+# Optional: GitHub API token
+resource "google_secret_manager_secret_iam_member" "github_token" {
+  count     = local.github_token_enabled ? 1 : 0
+  secret_id = google_secret_manager_secret.github_token[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
-# Allow GitHub Actions to push images to Artifact Registry
+# Optional: GCS bucket write access for scan persistence
+resource "google_storage_bucket_iam_member" "cloud_run_gcs_writer" {
+  count  = local.gcs_enabled ? 1 : 0
+  bucket = var.gcs_bucket_name
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# ============================================================================
+# IAM: GitHub Actions deployer permissions
+# ============================================================================
+
 resource "google_artifact_registry_repository_iam_member" "github_actions_writer" {
   count      = local.github_actions_enabled ? 1 : 0
   location   = google_artifact_registry_repository.docker_repo.location
@@ -107,7 +135,6 @@ resource "google_artifact_registry_repository_iam_member" "github_actions_writer
   member     = "serviceAccount:${google_service_account.github_actions[0].email}"
 }
 
-# Allow GitHub Actions to deploy Cloud Run revisions
 resource "google_project_iam_member" "github_actions_run_admin" {
   count   = local.github_actions_enabled ? 1 : 0
   project = var.gcp_project_id
@@ -115,7 +142,6 @@ resource "google_project_iam_member" "github_actions_run_admin" {
   member  = "serviceAccount:${google_service_account.github_actions[0].email}"
 }
 
-# Allow GitHub Actions to attach the runtime service account during deploys
 resource "google_service_account_iam_member" "github_actions_service_account_user" {
   count              = local.github_actions_enabled ? 1 : 0
   service_account_id = google_service_account.cloud_run.name
@@ -141,11 +167,11 @@ resource "google_iam_workload_identity_pool_provider" "github_actions" {
   display_name                       = "GitHub provider"
   description                        = "Accept GitHub OIDC tokens for CI/CD"
   attribute_mapping = {
-    "google.subject"           = "assertion.sub"
-    "attribute.actor"          = "assertion.actor"
-    "attribute.aud"            = "assertion.aud"
-    "attribute.ref"            = "assertion.ref"
-    "attribute.repository"     = "assertion.repository"
+    "google.subject"             = "assertion.sub"
+    "attribute.actor"            = "assertion.actor"
+    "attribute.aud"              = "assertion.aud"
+    "attribute.ref"              = "assertion.ref"
+    "attribute.repository"       = "assertion.repository"
     "attribute.repository_owner" = "assertion.repository_owner"
   }
   attribute_condition = "assertion.repository_owner == '${var.github_repository_owner}' && assertion.repository == '${local.github_repository}'"
@@ -162,11 +188,12 @@ resource "google_service_account_iam_member" "github_actions_workload_identity_u
 }
 
 # ============================================================================
-# SECRETS MANAGER: Gemini API Key
+# SECRET MANAGER: Required secrets
 # ============================================================================
 
-# Secret metadata is managed by Terraform. Secret versions are added separately
-# so the API key is not written into Terraform state.
+# Secret metadata is managed by Terraform. Secret versions are written by
+# deploy.sh so that secret values never appear in Terraform state.
+
 resource "google_secret_manager_secret" "gemini_api_key" {
   secret_id = "rupert-gemini-api-key"
   replication {
@@ -181,7 +208,12 @@ resource "google_secret_manager_secret" "scan_api_token" {
   }
 }
 
+# ============================================================================
+# SECRET MANAGER: Optional secrets
+# ============================================================================
+
 resource "google_secret_manager_secret" "github_webhook_secret" {
+  count     = local.github_webhook_enabled ? 1 : 0
   secret_id = "rupert-github-webhook-secret"
   replication {
     auto {}
@@ -189,7 +221,16 @@ resource "google_secret_manager_secret" "github_webhook_secret" {
 }
 
 resource "google_secret_manager_secret" "bitbucket_webhook_secret" {
+  count     = local.bitbucket_webhook_enabled ? 1 : 0
   secret_id = "rupert-bitbucket-webhook-secret"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret" "github_token" {
+  count     = local.github_token_enabled ? 1 : 0
+  secret_id = "rupert-github-token"
   replication {
     auto {}
   }
@@ -212,16 +253,15 @@ resource "google_cloud_run_service" "security_conductor" {
         command = []
         args    = []
 
-        # Resource allocation (hobby tier: minimal)
-        # Free tier: 180k vCPU-seconds/month
         resources {
           limits = {
-            cpu    = "0.5"
-            memory = "512Mi"
+            cpu    = var.cloud_run_cpu
+            memory = var.cloud_run_memory
           }
         }
 
-        # Environment variables
+        # ---- Required env vars ----
+
         env {
           name  = "LOG_LEVEL"
           value = "INFO"
@@ -262,7 +302,55 @@ resource "google_cloud_run_service" "security_conductor" {
           }
         }
 
-        # Liveness probe for Cloud Run health checks
+        # ---- Optional env vars (only injected when the feature is enabled) ----
+
+        dynamic "env" {
+          for_each = local.github_webhook_enabled ? [1] : []
+          content {
+            name = "GITHUB_WEBHOOK_SECRET"
+            value_from {
+              secret_key_ref {
+                name = google_secret_manager_secret.github_webhook_secret[0].secret_id
+                key  = "latest"
+              }
+            }
+          }
+        }
+
+        dynamic "env" {
+          for_each = local.bitbucket_webhook_enabled ? [1] : []
+          content {
+            name = "BITBUCKET_WEBHOOK_SECRET"
+            value_from {
+              secret_key_ref {
+                name = google_secret_manager_secret.bitbucket_webhook_secret[0].secret_id
+                key  = "latest"
+              }
+            }
+          }
+        }
+
+        dynamic "env" {
+          for_each = local.github_token_enabled ? [1] : []
+          content {
+            name = "GITHUB_TOKEN"
+            value_from {
+              secret_key_ref {
+                name = google_secret_manager_secret.github_token[0].secret_id
+                key  = "latest"
+              }
+            }
+          }
+        }
+
+        dynamic "env" {
+          for_each = local.gcs_enabled ? [1] : []
+          content {
+            name  = "GCS_BUCKET_NAME"
+            value = var.gcs_bucket_name
+          }
+        }
+
         liveness_probe {
           http_get {
             path = "/health"
@@ -274,13 +362,13 @@ resource "google_cloud_run_service" "security_conductor" {
         }
       }
 
-      timeout_seconds = 300
+      timeout_seconds = var.cloud_run_timeout
     }
 
     metadata {
       annotations = {
         "autoscaling.knative.dev/minScale" = "0"
-        "autoscaling.knative.dev/maxScale" = "10"
+        "autoscaling.knative.dev/maxScale" = tostring(var.cloud_run_max_instances)
       }
     }
   }

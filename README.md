@@ -3,6 +3,7 @@
 AI-powered code-diff security scanning with FastAPI, Pydantic-AI, Google Gemini, and GCP Cloud Run.
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for the full deployment walkthrough.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the full deployment walkthrough.
 
 ## What It Does
 
@@ -28,9 +29,9 @@ Requirements:
 Setup:
 
 ```bash
-cd /Users/yourUsernameHere/Workspace/rupert-security-conductor
+cd rupert-security-conductor
 bash infra/scripts/setup-dev.sh
-source venv/bin/activate
+source .venv/bin/activate
 export GEMINI_API_KEY="your-api-key"
 uvicorn app.main:app --reload
 ```
@@ -55,6 +56,33 @@ The deployment flow is:
 
 That step-by-step version lives in [DEPLOYMENT.md](DEPLOYMENT.md).
 
+## Data Privacy
+
+**Code diffs submitted to this service are sent to Google's Gemini API.**
+
+This includes all content present in the diff — source code, comments, string literals, and any secrets or credentials that may have been accidentally committed. Before deploying or using this service you must ensure:
+
+- You are authorised to share the code with Google (review Google's [Gemini API Terms of Service](https://ai.google.dev/terms) and your organisation's data classification policy).
+- Diffs submitted do not contain credentials, API keys, or other secrets. Consider running a secret-scanning step (e.g. `truffleHog`, `git-secrets`) before submitting to this service.
+- Your users are informed that their code will be processed by an external AI service.
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `GEMINI_API_KEY` | Yes | Gemini API key for the LLM agents |
+| `SCAN_API_TOKEN` | **Required in production** | Bearer token required on `POST /scan`. If unset, the endpoint returns 503 unless `SCAN_AUTH_DISABLED=true` is also set. |
+| `SCAN_AUTH_DISABLED` | No | Set to `true` only for local dev to explicitly allow unauthenticated `/scan` access. Never set in production. |
+| `GITHUB_WEBHOOK_SECRET` | **Required** | Shared secret used to verify `X-Hub-Signature-256` on GitHub webhooks. Webhooks are rejected if this is not set. |
+| `BITBUCKET_WEBHOOK_SECRET` | **Required** | Shared secret used to verify `X-Hub-Signature` on Bitbucket webhooks. Webhooks are rejected if this is not set. |
+| `GITHUB_TOKEN` | Recommended | GitHub personal access token (`repo` read scope) for fetching diffs. Without it, public-repo diffs still work but rate limits are tighter; private repos will not work at all. |
+| `GCS_BUCKET_NAME` | Recommended | GCS bucket where scan results (`result.json`) and Markdown reports (`report.md`) are persisted under `scans/{scan_id}/`. |
+| `MAX_CONCURRENT_SCANS` | No | Maximum scans running simultaneously in this process (default: `5`). |
+| `MAX_DIFF_SIZE_BYTES` | No | Maximum diff size accepted in bytes (default: `512000` = 500 KB). Larger requests are rejected with HTTP 413. |
+| `LOG_LEVEL` | No | Python logging level (default: `INFO`) |
+| `GCP_PROJECT_ID` | Deployment | GCP project used during deployment |
+| `GCP_REGION` | Deployment | GCP region (default in scripts: `europe-west1`) |
+
 ## Security Notes
 
 Current infrastructure identity model:
@@ -69,6 +97,10 @@ Current infrastructure identity model:
   - `iam.workloadIdentityUser` scoped to your GitHub repository
 
 Important: the app itself still needs hardening around public access and webhook signature verification. The deployment docs only cover infrastructure setup.
+
+## Webhook Behaviour
+
+Both `/webhook/github` and `/webhook/bitbucket` return **202 Accepted** immediately and process the scan in a background task. For the GitHub webhook, the app automatically fetches the diff from the GitHub API using `GITHUB_TOKEN`. Results are persisted to GCS if `GCS_BUCKET_NAME` is set — use the `scan_id` returned in the 202 response to locate them at `gs://$GCS_BUCKET_NAME/scans/{scan_id}/`.
 
 ## Useful Commands
 
@@ -91,7 +123,7 @@ gcloud logging read "resource.labels.service_name=rupert-security-conductor" \
 Destroy managed resources:
 
 ```bash
-cd /Users/yourUsernameHere/Workspace/rupert-security-conductor/infra/terraform
+cd rupert-security-conductor/infra/terraform
 terraform destroy -auto-approve \
   -var="gcp_project_id=$GCP_PROJECT_ID" \
   -var="gcp_region=$GCP_REGION"

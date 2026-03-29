@@ -7,10 +7,10 @@ echo "🛠️  Setting up Rupert Security Conductor development environment..."
 
 # Create Python virtual environment
 echo "📦 Creating Python virtual environment..."
-python3.12 -m venv venv
+python3.12 -m venv .venv
 
 # Activate virtual environment
-source venv/bin/activate
+source .venv/bin/activate
 
 # Install dependencies
 echo "📚 Installing dependencies..."
@@ -37,7 +37,7 @@ echo ""
 echo "✅ Setup complete!"
 echo ""
 echo "📖 To start the development server:"
-echo "   source venv/bin/activate"
+echo "   source .venv/bin/activate"
 echo "   uvicorn app.main:app --reload"
 echo ""
 echo "🧪 To test the API:"

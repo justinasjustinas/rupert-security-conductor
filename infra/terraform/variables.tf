@@ -92,3 +92,31 @@ variable "cloud_run_max_instances" {
   type        = number
   default     = 10
 }
+
+# ============================================================================
+# OPTIONAL FEATURE FLAGS
+# ============================================================================
+
+variable "enable_github_webhook" {
+  description = "Create the GitHub webhook HMAC secret in Secret Manager and wire it to Cloud Run. Set to true when GITHUB_WEBHOOK_SECRET is provided to deploy.sh."
+  type        = bool
+  default     = false
+}
+
+variable "enable_bitbucket_webhook" {
+  description = "Create the Bitbucket webhook HMAC secret in Secret Manager and wire it to Cloud Run. Set to true when BITBUCKET_WEBHOOK_SECRET is provided to deploy.sh."
+  type        = bool
+  default     = false
+}
+
+variable "enable_github_token" {
+  description = "Create a GitHub API token secret in Secret Manager and wire it to Cloud Run. Required for automatic diff fetching on private repositories."
+  type        = bool
+  default     = false
+}
+
+variable "gcs_bucket_name" {
+  description = "GCS bucket name for scan result persistence. If non-empty, the Cloud Run service account is granted objectCreator on the bucket and GCS_BUCKET_NAME is set as an env var."
+  type        = string
+  default     = ""
+}

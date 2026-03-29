@@ -2,6 +2,18 @@
 # Deployment script for Rupert Security Conductor
 # Usage: ./deploy.sh <GCP_PROJECT_ID> [GCP_REGION] [IMAGE_TAG]
 # Example: ./deploy.sh my-project europe-west1 build-20260314-120000
+#
+# Required env vars:
+#   GEMINI_API_KEY      - Gemini API key for the LLM agents
+#   SCAN_API_TOKEN      - Bearer token protecting the /scan endpoint
+#
+# Optional env vars (omit to skip the feature entirely):
+#   GITHUB_WEBHOOK_SECRET   - HMAC secret for GitHub webhook signature verification
+#   BITBUCKET_WEBHOOK_SECRET - HMAC secret for Bitbucket webhook signature verification
+#   GITHUB_TOKEN            - GitHub API token for fetching commit diffs
+#   GCS_BUCKET_NAME         - GCS bucket for scan result persistence (must already exist)
+#   GITHUB_REPOSITORY_OWNER - GitHub org/user for CI/CD Workload Identity Federation
+#   GITHUB_REPOSITORY_NAME  - GitHub repo name for CI/CD Workload Identity Federation
 
 set -e
 
@@ -142,6 +154,31 @@ import_existing_resources() {
       "projects/${GCP_PROJECT_ID}/secrets/rupert-scan-api-token"
   fi
 
+  # Optional: import only if the feature is enabled this run
+  if [ -n "${GITHUB_WEBHOOK_SECRET:-}" ]; then
+    if gcloud secrets describe "rupert-github-webhook-secret" >/dev/null 2>&1; then
+      import_if_exists \
+        "google_secret_manager_secret.github_webhook_secret[0]" \
+        "projects/${GCP_PROJECT_ID}/secrets/rupert-github-webhook-secret"
+    fi
+  fi
+
+  if [ -n "${BITBUCKET_WEBHOOK_SECRET:-}" ]; then
+    if gcloud secrets describe "rupert-bitbucket-webhook-secret" >/dev/null 2>&1; then
+      import_if_exists \
+        "google_secret_manager_secret.bitbucket_webhook_secret[0]" \
+        "projects/${GCP_PROJECT_ID}/secrets/rupert-bitbucket-webhook-secret"
+    fi
+  fi
+
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    if gcloud secrets describe "rupert-github-token" >/dev/null 2>&1; then
+      import_if_exists \
+        "google_secret_manager_secret.github_token[0]" \
+        "projects/${GCP_PROJECT_ID}/secrets/rupert-github-token"
+    fi
+  fi
+
   if [ -n "${GITHUB_REPOSITORY_OWNER:-}" ] && [ -n "${GITHUB_REPOSITORY_NAME:-}" ]; then
     if gcloud iam service-accounts describe "$github_actions_sa_email" >/dev/null 2>&1; then
       import_if_exists \
@@ -150,6 +187,10 @@ import_existing_resources() {
     fi
   fi
 }
+
+# ============================================================================
+# ENTRYPOINT
+# ============================================================================
 
 if [ -z "$GCP_PROJECT_ID" ]; then
   echo "Usage: ./deploy.sh <GCP_PROJECT_ID> [GCP_REGION] [IMAGE_TAG]"
@@ -171,12 +212,23 @@ resolve_image_tag
 preflight_check
 
 echo "🚀 Deploying Rupert Security Conductor"
-echo "   Project: $GCP_PROJECT_ID"
-echo "   Region: $GCP_REGION"
+echo "   Project:   $GCP_PROJECT_ID"
+echo "   Region:    $GCP_REGION"
 echo "   Image Tag: $IMAGE_TAG"
 echo ""
 
-# Set project
+# Summarise which optional features are enabled
+echo "📋 Optional features:"
+[ -n "${GITHUB_WEBHOOK_SECRET:-}" ]   && echo "   ✅ GitHub webhook signature verification" \
+                                       || echo "   ⬜ GitHub webhook (GITHUB_WEBHOOK_SECRET not set)"
+[ -n "${BITBUCKET_WEBHOOK_SECRET:-}" ] && echo "   ✅ Bitbucket webhook signature verification" \
+                                        || echo "   ⬜ Bitbucket webhook (BITBUCKET_WEBHOOK_SECRET not set)"
+[ -n "${GITHUB_TOKEN:-}" ]             && echo "   ✅ GitHub diff auto-fetch" \
+                                       || echo "   ⬜ GitHub diff auto-fetch (GITHUB_TOKEN not set)"
+[ -n "${GCS_BUCKET_NAME:-}" ]          && echo "   ✅ GCS scan persistence (${GCS_BUCKET_NAME})" \
+                                       || echo "   ⬜ GCS scan persistence (GCS_BUCKET_NAME not set)"
+echo ""
+
 gcloud config set project "$GCP_PROJECT_ID"
 
 echo "ℹ️  Bootstrap permissions required on the deploying account:"
@@ -199,11 +251,12 @@ gcloud services enable \
   iamcredentials.googleapis.com \
   --quiet
 
-# Bootstrap Terraform-managed prerequisites first
-echo "🏗️  Bootstrapping Terraform-managed prerequisites..."
-cd infra/terraform
+# ============================================================================
+# TERRAFORM: Build variable args
+# ============================================================================
+
+cd "${REPO_ROOT}/infra/terraform"
 terraform init
-import_existing_resources
 
 TF_ARGS=(
   -auto-approve
@@ -211,6 +264,12 @@ TF_ARGS=(
   -var="gcp_region=${GCP_REGION}"
   -var="docker_image_tag=${IMAGE_TAG}"
 )
+
+# Optional feature flags — set only when the env var is present
+[ -n "${GITHUB_WEBHOOK_SECRET:-}" ]    && TF_ARGS+=(-var="enable_github_webhook=true")
+[ -n "${BITBUCKET_WEBHOOK_SECRET:-}" ] && TF_ARGS+=(-var="enable_bitbucket_webhook=true")
+[ -n "${GITHUB_TOKEN:-}" ]             && TF_ARGS+=(-var="enable_github_token=true")
+[ -n "${GCS_BUCKET_NAME:-}" ]          && TF_ARGS+=(-var="gcs_bucket_name=${GCS_BUCKET_NAME}")
 
 if [ -n "${GITHUB_REPOSITORY_OWNER:-}" ] && [ -n "${GITHUB_REPOSITORY_NAME:-}" ]; then
   echo "🔐 Configuring GitHub Actions Workload Identity Federation for ${GITHUB_REPOSITORY_OWNER}/${GITHUB_REPOSITORY_NAME}..."
@@ -220,11 +279,31 @@ if [ -n "${GITHUB_REPOSITORY_OWNER:-}" ] && [ -n "${GITHUB_REPOSITORY_NAME:-}" ]
   )
 fi
 
-terraform apply "${TF_ARGS[@]}" \
-  -target=google_artifact_registry_repository.docker_repo \
-  -target=google_secret_manager_secret.gemini_api_key \
-  -target=google_secret_manager_secret.scan_api_token \
+import_existing_resources
+
+# ============================================================================
+# TERRAFORM: Bootstrap required infrastructure before image push
+# ============================================================================
+
+echo "🏗️  Bootstrapping Terraform-managed prerequisites..."
+
+BOOTSTRAP_TARGETS=(
+  -target=google_artifact_registry_repository.docker_repo
+  -target=google_secret_manager_secret.gemini_api_key
+  -target=google_secret_manager_secret.scan_api_token
   -target=google_service_account.cloud_run
+)
+
+[ -n "${GITHUB_WEBHOOK_SECRET:-}" ]    && BOOTSTRAP_TARGETS+=(-target="google_secret_manager_secret.github_webhook_secret[0]")
+[ -n "${BITBUCKET_WEBHOOK_SECRET:-}" ] && BOOTSTRAP_TARGETS+=(-target="google_secret_manager_secret.bitbucket_webhook_secret[0]")
+[ -n "${GITHUB_TOKEN:-}" ]             && BOOTSTRAP_TARGETS+=(-target="google_secret_manager_secret.github_token[0]")
+
+terraform apply "${TF_ARGS[@]}" "${BOOTSTRAP_TARGETS[@]}"
+
+# ============================================================================
+# SECRET MANAGER: Upload secret values
+# Secret versions are written outside of Terraform so values never enter state.
+# ============================================================================
 
 echo "🔐 Adding Gemini API key to Secret Manager..."
 gcloud secrets versions add rupert-gemini-api-key --data-file=- <<< "$GEMINI_API_KEY"
@@ -234,14 +313,34 @@ echo "🔐 Adding scan API token to Secret Manager..."
 gcloud secrets versions add rupert-scan-api-token --data-file=- <<< "$SCAN_API_TOKEN"
 wait_for_secret_version "rupert-scan-api-token"
 
-# Authenticate Docker for Artifact Registry (needed for buildx)
+if [ -n "${GITHUB_WEBHOOK_SECRET:-}" ]; then
+  echo "🔐 Adding GitHub webhook secret to Secret Manager..."
+  gcloud secrets versions add rupert-github-webhook-secret --data-file=- <<< "$GITHUB_WEBHOOK_SECRET"
+  wait_for_secret_version "rupert-github-webhook-secret"
+fi
+
+if [ -n "${BITBUCKET_WEBHOOK_SECRET:-}" ]; then
+  echo "🔐 Adding Bitbucket webhook secret to Secret Manager..."
+  gcloud secrets versions add rupert-bitbucket-webhook-secret --data-file=- <<< "$BITBUCKET_WEBHOOK_SECRET"
+  wait_for_secret_version "rupert-bitbucket-webhook-secret"
+fi
+
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  echo "🔐 Adding GitHub token to Secret Manager..."
+  gcloud secrets versions add rupert-github-token --data-file=- <<< "$GITHUB_TOKEN"
+  wait_for_secret_version "rupert-github-token"
+fi
+
+# ============================================================================
+# DOCKER: Build and push image
+# ============================================================================
+
 echo "🔐 Configuring Artifact Registry authentication..."
 gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev"
 
-# Build and push Docker image directly for single architecture
 echo "📦 Building and pushing Docker image (single-arch amd64)..."
 echo "   Dockerfile: ${REPO_ROOT}/Dockerfile"
-echo "   Context: ${REPO_ROOT}"
+echo "   Context:    ${REPO_ROOT}"
 docker buildx build \
   --file "${REPO_ROOT}/Dockerfile" \
   --push \
@@ -250,33 +349,44 @@ docker buildx build \
   -t "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}" \
   "${REPO_ROOT}"
 
-# Apply the full Terraform stack
+# ============================================================================
+# TERRAFORM: Full apply
+# ============================================================================
+
 echo "🏗️  Applying full Terraform configuration..."
-cd "${REPO_ROOT}/infra/terraform"
 terraform apply "${TF_ARGS[@]}"
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
 
 echo ""
 echo "✅ Deployment complete!"
 echo ""
 echo "📋 Next steps:"
+echo ""
 echo "1. Get the service URL:"
 terraform output cloud_run_service_url
 echo ""
-echo "2. Test /scan with the bearer token you deployed:"
+echo "2. Test the health endpoint:"
+echo "   curl \$(terraform output -raw cloud_run_service_url)/health"
+echo ""
+echo "3. Test /scan with the bearer token:"
 echo "   curl -X POST \$(terraform output -raw cloud_run_service_url)/scan \\"
 echo "     -H \"Authorization: Bearer \$SCAN_API_TOKEN\" \\"
 echo "     -H \"Content-Type: application/json\" \\"
 echo "     -d '{\"repository\":\"test-repo\",\"branch\":\"main\",\"commit_hash\":\"abc123\",\"code_diff\":\"- const sql = \\\"SELECT * FROM users WHERE id = \\\" + userId;\",\"author\":\"manual\"}'"
 echo ""
+
 if [ -n "${GITHUB_REPOSITORY_OWNER:-}" ] && [ -n "${GITHUB_REPOSITORY_NAME:-}" ]; then
-  echo "3. Add these GitHub Actions secrets:"
+  echo "4. Add these GitHub Actions secrets:"
   echo "   GCP_PROJECT_ID=${GCP_PROJECT_ID}"
   echo "   WIF_PROVIDER=$(terraform output -raw github_workload_identity_provider)"
   echo "   WIF_SERVICE_ACCOUNT=$(terraform output -raw github_actions_service_account_email)"
   echo ""
 fi
 
-echo "4. Optional least-privilege cleanup for the bootstrap account (${ACTIVE_GCLOUD_ACCOUNT}):"
+echo "5. Optional least-privilege cleanup for the bootstrap account (${ACTIVE_GCLOUD_ACCOUNT}):"
 echo "   After verifying deploys work through GitHub Actions, remove the temporary bootstrap roles:"
 echo "   gcloud projects remove-iam-policy-binding ${GCP_PROJECT_ID} --member=\"user:${ACTIVE_GCLOUD_ACCOUNT}\" --role=\"roles/artifactregistry.admin\""
 echo "   gcloud projects remove-iam-policy-binding ${GCP_PROJECT_ID} --member=\"user:${ACTIVE_GCLOUD_ACCOUNT}\" --role=\"roles/secretmanager.admin\""
