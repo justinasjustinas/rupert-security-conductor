@@ -84,9 +84,9 @@ def retry_on_llm_error(
 # AGENT SINGLETONS: Built once per process, reused across scans
 # ============================================================================
 
-_hunter_agent: "Agent | None" = None
-_verifier_agent: "Agent | None" = None
-_reporter_agent: "Agent | None" = None
+_hunter_agent: "Agent | None" = None  # pylint: disable=invalid-name
+_verifier_agent: "Agent | None" = None  # pylint: disable=invalid-name
+_reporter_agent: "Agent | None" = None  # pylint: disable=invalid-name
 
 
 # ============================================================================
@@ -163,7 +163,7 @@ def _build_hunter_agent() -> Agent:
 
 def _get_hunter_agent() -> Agent:
     """Return the module-level hunter agent, building it on first call."""
-    global _hunter_agent
+    global _hunter_agent  # pylint: disable=global-statement
     if _hunter_agent is None:
         _hunter_agent = _build_hunter_agent()
     return _hunter_agent
@@ -216,7 +216,7 @@ def _build_verifier_agent() -> Agent:
 
 def _get_verifier_agent() -> Agent:
     """Return the module-level verifier agent, building it on first call."""
-    global _verifier_agent
+    global _verifier_agent  # pylint: disable=global-statement
     if _verifier_agent is None:
         _verifier_agent = _build_verifier_agent()
     return _verifier_agent
@@ -260,7 +260,7 @@ def _build_reporter_agent() -> Agent:
 
 def _get_reporter_agent() -> Agent:
     """Return the module-level reporter agent, building it on first call."""
-    global _reporter_agent
+    global _reporter_agent  # pylint: disable=global-statement
     if _reporter_agent is None:
         _reporter_agent = _build_reporter_agent()
     return _reporter_agent
