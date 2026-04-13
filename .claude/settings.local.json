@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); resources=d.get\\('resources',[]\\); print\\(f'{len\\(resources\\)} resources'\\); [print\\(r.get\\('type'\\), r.get\\('name'\\)\\) for r in resources[:20]]\")",
+      "Bash(git -C /Users/justinas/Workspace/rupert-security-conductor log --oneline -10)",
+      "Bash(git -C /Users/justinas/Workspace/rupert-security-conductor log --all --oneline)",
+      "Bash(git -C /Users/justinas/Workspace/rupert-security-conductor log --all -p -- '*.tfstate' '*.env' 'credentials*' '*.key')",
+      "Bash(.venv/bin/pip show:*)",
+      "Bash(.venv/bin/python -c \"import griffe; print\\(griffe.__version__\\); import pydantic_ai; print\\(pydantic_ai.__version__\\)\")",
+      "Bash(ls .venv/lib/python3.12/site-packages/griffe-*.dist-info/METADATA)",
+      "Bash(ls .venv/lib/python3.12/site-packages/pydantic_ai_slim-*.dist-info/METADATA)",
+      "Bash(.venv/bin/python -c \"from griffe import DocstringSectionKind; print\\('OK'\\)\")",
+      "Bash(.venv/bin/python -c \"import griffe; print\\([x for x in dir\\(griffe\\) if 'Docstring' in x or 'Section' in x]\\)\")",
+      "Bash(.venv/bin/python -m pip uninstall griffe -y)",
+      "Bash(.venv/bin/python -m pip install \"griffelib==2.0.0\" --force-reinstall)"
+    ]
+  }
+}

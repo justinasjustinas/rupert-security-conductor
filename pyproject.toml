@@ -50,9 +50,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/rupert-security-conductor"
-Repository = "https://github.com/yourusername/rupert-security-conductor.git"
-Issues = "https://github.com/yourusername/rupert-security-conductor/issues"
+Homepage = "https://github.com/justinasjustinas/rupert-security-conductor"
+Repository = "https://github.com/justinasjustinas/rupert-security-conductor.git"
+Issues = "https://github.com/justinasjustinas/rupert-security-conductor/issues"
 
 [tool.setuptools]
 packages = ["app"]

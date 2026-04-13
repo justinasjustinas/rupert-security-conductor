@@ -1,8 +1,8 @@
 # Rupert Security Conductor
 
 AI-powered code-diff security scanning with FastAPI, Pydantic-AI, Google Gemini, and GCP Cloud Run.
+It's just an experiment in multi-agent pipelines where one stage adversarially challenges the previous one's output — applied to code diff security scanning."
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the full deployment walkthrough.
 See [DEPLOYMENT.md](DEPLOYMENT.md) for the full deployment walkthrough.
 
 ## What It Does

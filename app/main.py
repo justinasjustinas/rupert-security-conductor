@@ -6,11 +6,14 @@ import hashlib
 import hmac
 import json
 import os
+import time
 import uuid
+from collections import deque
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from app.agents import (
@@ -38,6 +41,14 @@ _scan_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SCANS)
 # to prevent quota exhaustion and context-window overflow.
 _MAX_DIFF_BYTES = int(os.getenv("MAX_DIFF_SIZE_BYTES", str(500 * 1024)))
 
+# Sliding-window rate limit for /scan.  NOTE: this is per-process; with
+# multiple Cloud Run instances each instance enforces its own limit.
+_RATE_LIMIT_MAX = int(os.getenv("SCAN_RATE_LIMIT", "10"))  # requests per window
+_RATE_LIMIT_WINDOW_SECS = 60
+
+_rate_limit_store: dict[str, deque] = {}
+_rate_limit_lock = asyncio.Lock()
+
 app = FastAPI(
     title="Rupert Security Conductor",
     description="AI-powered vulnerability scanner using Pydantic-AI agents",
@@ -51,7 +62,9 @@ app = FastAPI(
 
 
 @app.middleware("http")
-async def add_security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
+async def add_security_headers(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     """Add defensive HTTP security headers to every response."""
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -160,6 +173,48 @@ def _validate_diff(diff: str) -> None:
 
 
 # ============================================================================
+# RATE LIMITING
+# ============================================================================
+
+
+def _rate_limit_key(authorization: str | None, request: Request) -> str:
+    """Derive a stable, opaque bucket key for the caller.
+
+    Uses a SHA-256 hash of the bearer token so the raw token is never stored
+    under this key.  Falls back to client IP when SCAN_AUTH_DISABLED is set
+    (local-dev only).
+    """
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ").strip()
+        return "token:" + hashlib.sha256(token.encode()).hexdigest()
+    forwarded_for = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    ip = forwarded_for or (request.client.host if request.client else "unknown")
+    return "ip:" + ip
+
+
+async def _enforce_rate_limit(key: str) -> None:
+    """Sliding-window in-process rate limiter.  Raises HTTP 429 when the bucket is full."""
+    now = time.monotonic()
+    cutoff = now - _RATE_LIMIT_WINDOW_SECS
+
+    async with _rate_limit_lock:
+        window = _rate_limit_store.setdefault(key, deque())
+        while window and window[0] < cutoff:
+            window.popleft()
+        if len(window) >= _RATE_LIMIT_MAX:
+            retry_after = int(window[0] + _RATE_LIMIT_WINDOW_SECS - now) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Rate limit exceeded. "
+                    f"Maximum {_RATE_LIMIT_MAX} requests per {_RATE_LIMIT_WINDOW_SECS}s."
+                ),
+                headers={"Retry-After": str(retry_after)},
+            )
+        window.append(now)
+
+
+# ============================================================================
 # GITHUB DIFF FETCHING
 # ============================================================================
 
@@ -208,7 +263,7 @@ def _sync_save_to_gcs(
 
     Returns the GCS URI of the report blob, or an empty string on failure.
     """
-    from google.cloud import storage  # pylint: disable=import-outside-toplevel
+    from google.cloud import storage  # type: ignore[import-untyped]  # pylint: disable=import-outside-toplevel
 
     client = storage.Client()
     bucket = client.bucket(bucket_name)
@@ -258,31 +313,34 @@ async def health_check() -> HealthResponse:
 
 @app.post("/scan", response_model=ScanResult)
 async def start_scan(
-    request: ScanRequest, authorization: str | None = Header(default=None)
+    body: ScanRequest,
+    request: Request,
+    authorization: str | None = Header(default=None),
 ) -> ScanResult:
     """Initiate a security scan with code diff."""
     _verify_scan_authorization(authorization)
-    _validate_diff(request.code_diff)
+    await _enforce_rate_limit(_rate_limit_key(authorization, request))
+    _validate_diff(body.code_diff)
 
     scan_id = str(uuid.uuid4())
     logger.info(
         "AUDIT: scan_requested",
         extra={
             "scan_id": scan_id,
-            "repository": request.repository,
-            "commit_hash": request.commit_hash,
-            "author": request.author,
-            "diff_bytes": len(request.code_diff.encode()),
+            "repository": body.repository,
+            "commit_hash": body.commit_hash,
+            "author": body.author,
+            "diff_bytes": len(body.code_diff.encode()),
         },
     )
 
     try:
         result = await orchestrate_security_scan(
             scan_id=scan_id,
-            repository=request.repository,
-            commit_hash=request.commit_hash,
-            code_diff=request.code_diff,
-            author=request.author,
+            repository=body.repository,
+            commit_hash=body.commit_hash,
+            code_diff=body.code_diff,
+            author=body.author,
         )
         return result
 
